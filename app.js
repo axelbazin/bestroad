@@ -331,6 +331,14 @@ async function runSearch() {
 
     const cheapIdx = tags.indexOf("cheap");
     selectRoute(cheapIdx >= 0 ? cheapIdx : 0);
+    updatePeekSummary();
+
+    // Sur mobile, on rabaisse le sheet pour laisser voir la carte une fois
+    // le trajet calculé. L'utilisateur peut tirer pour voir le détail.
+    if (isMobileLayout()) {
+      const sheet = document.getElementById("sheet");
+      if (sheet) setSnap(sheet, "mid");
+    }
 
     if (!document.getElementById("status").classList.contains("error")) {
       setStatus(`${routes.length} itinéraire${routes.length > 1 ? "s" : ""} comparé${routes.length > 1 ? "s" : ""}.`);
@@ -343,10 +351,152 @@ async function runSearch() {
   }
 }
 
+/* ---------------- Bottom sheet (Waze-style) ---------------- */
+
+const SNAP_ORDER = ["peek", "mid", "full"];
+
+function isMobileLayout() {
+  return window.matchMedia("(max-width: 899px)").matches;
+}
+
+function getCurrentTranslateY(el) {
+  const m = new DOMMatrixReadOnly(getComputedStyle(el).transform);
+  return m.m42;
+}
+
+function snapPositionsPx(sheet) {
+  const styles = getComputedStyle(document.documentElement);
+  const peek = parseFloat(styles.getPropertyValue("--peek-h")) || 132;
+  const sheetH = sheet.getBoundingClientRect().height;
+  const vh = window.innerHeight;
+  return {
+    full: 0,
+    mid: Math.max(0, sheetH - vh * 0.56),
+    peek: Math.max(0, sheetH - peek),
+  };
+}
+
+function setSnap(sheet, name, { animate = true } = {}) {
+  if (!animate) sheet.classList.add("dragging");
+  sheet.dataset.snap = name;
+  sheet.style.transform = "";
+  if (!animate) {
+    requestAnimationFrame(() => sheet.classList.remove("dragging"));
+  }
+  if (state.map) {
+    setTimeout(() => state.map.invalidateSize(), 320);
+  }
+  updatePeekSummary();
+}
+
+function nearestSnap(currentPx, snaps) {
+  let best = "mid";
+  let bestDist = Infinity;
+  for (const name of SNAP_ORDER) {
+    const d = Math.abs(currentPx - snaps[name]);
+    if (d < bestDist) { bestDist = d; best = name; }
+  }
+  return best;
+}
+
+function initBottomSheet() {
+  const sheet = document.getElementById("sheet");
+  const handle = document.getElementById("sheet-handle");
+  const peek = document.getElementById("sheet-peek");
+
+  let dragging = false;
+  let pointerId = null;
+  let startY = 0;
+  let startTranslate = 0;
+  let dragMoved = false;
+
+  function onPointerDown(e) {
+    if (!isMobileLayout()) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    dragging = true;
+    pointerId = e.pointerId;
+    startY = e.clientY;
+    startTranslate = getCurrentTranslateY(sheet);
+    dragMoved = false;
+    sheet.classList.add("dragging");
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  function onPointerMove(e) {
+    if (!dragging || e.pointerId !== pointerId) return;
+    const dy = e.clientY - startY;
+    if (Math.abs(dy) > 4) dragMoved = true;
+    const snaps = snapPositionsPx(sheet);
+    const next = Math.max(snaps.full, Math.min(snaps.peek, startTranslate + dy));
+    sheet.style.transform = `translateY(${next}px)`;
+  }
+
+  function onPointerUp(e) {
+    if (!dragging || e.pointerId !== pointerId) return;
+    dragging = false;
+    pointerId = null;
+    sheet.classList.remove("dragging");
+    const snaps = snapPositionsPx(sheet);
+    const currentPx = getCurrentTranslateY(sheet);
+    const target = nearestSnap(currentPx, snaps);
+    sheet.style.transform = "";
+    sheet.dataset.snap = target;
+    if (state.map) setTimeout(() => state.map.invalidateSize(), 320);
+    updatePeekSummary();
+  }
+
+  for (const el of [handle, peek]) {
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("pointercancel", onPointerUp);
+  }
+
+  // Tap (no drag) on peek header → cycle to next state
+  peek.addEventListener("click", () => {
+    if (!isMobileLayout()) return;
+    if (dragMoved) { dragMoved = false; return; }
+    const cur = sheet.dataset.snap || "mid";
+    const next = cur === "peek" ? "mid" : cur === "mid" ? "full" : "peek";
+    setSnap(sheet, next);
+  });
+
+  // When focusing an input, expand to full so the keyboard doesn't hide it
+  document.querySelectorAll(".sheet input, .sheet select").forEach((el) => {
+    el.addEventListener("focus", () => {
+      if (!isMobileLayout()) return;
+      if (sheet.dataset.snap !== "full") setSnap(sheet, "full");
+    });
+  });
+
+  // Recompute on resize
+  window.addEventListener("resize", () => {
+    sheet.style.transform = "";
+    if (state.map) state.map.invalidateSize();
+  });
+}
+
+function updatePeekSummary() {
+  const title = document.getElementById("peek-title");
+  const sub = document.getElementById("peek-sub");
+  if (!title || !sub) return;
+  if (!state.routes.length) {
+    title.textContent = "Où va-t-on ?";
+    sub.textContent = "Compare le plus rapide, l'éco et le moins cher";
+    return;
+  }
+  const fromLabel = (state.points.from?.label || "Départ").split(",")[0];
+  const toLabel = (state.points.to?.label || "Arrivée").split(",")[0];
+  const cheapest = state.routes.reduce((a, b) => a.metrics.totalCost <= b.metrics.totalCost ? a : b);
+  title.textContent = `${fromLabel} → ${toLabel}`;
+  sub.textContent = `${fmtDuration(cheapest.metrics.durationH)} · ${fmtKm(cheapest.metrics.distanceKm)} · ${fmtMoney(cheapest.metrics.totalCost)}`;
+}
+
 /* ---------------- Boot ---------------- */
 
 function boot() {
   initMap();
+  initBottomSheet();
   attachAutocomplete("from", "from-suggestions", "from");
   attachAutocomplete("to", "to-suggestions", "to");
   document.getElementById("search").addEventListener("click", runSearch);
@@ -368,6 +518,7 @@ function boot() {
       drawRoutes(state.routes, tags);
       renderResults(state.routes, tags);
       if (state.activeIndex != null) selectRoute(state.activeIndex);
+      updatePeekSummary();
     });
   });
 }
