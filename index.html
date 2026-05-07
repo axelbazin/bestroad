@@ -5,11 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0f172a" />
   <title>BestRoad — Simulateur d'itinéraire</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="style.css?v=7" />
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="style.css?v=8" />
 </head>
 <body>
   <main id="map"></main>
+
+  <button class="map-fab" id="locate-btn" type="button" aria-label="Ma position" title="Ma position">
+    <span class="fab-icon">⌖</span>
+  </button>
 
   <section class="sheet" data-snap="mid" id="sheet">
     <div class="sheet__handle" id="sheet-handle">
@@ -27,12 +31,14 @@
     </header>
 
     <div class="sheet__content">
-      <!-- VIEW: form -->
       <div class="view view-form" id="view-form">
         <section class="form">
           <label class="field">
             <span>Départ</span>
-            <input id="from" type="text" placeholder="Ex. Paris, France" autocomplete="off" />
+            <div class="field-row">
+              <input id="from" type="text" placeholder="Ex. Paris, France" autocomplete="off" />
+              <button class="field-btn" id="locate-input" type="button" aria-label="Utiliser ma position" title="Utiliser ma position">📍</button>
+            </div>
             <ul class="suggestions" id="from-suggestions"></ul>
           </label>
 
@@ -69,7 +75,6 @@
         </section>
       </div>
 
-      <!-- VIEW: loading -->
       <div class="view view-loading" id="view-loading" hidden>
         <div class="loader">
           <div class="loader-track">
@@ -82,26 +87,25 @@
         </div>
       </div>
 
-      <!-- VIEW: results -->
       <div class="view view-results" id="view-results" hidden>
         <section class="results" id="results"></section>
       </div>
 
-      <!-- VIEW: roadbook -->
       <div class="view view-roadbook" id="view-roadbook" hidden>
         <div class="roadbook" id="roadbook"></div>
       </div>
 
       <footer class="legal">
-        Données &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> ·
+        Tuiles © <a href="https://openfreemap.org/" target="_blank" rel="noreferrer">OpenFreeMap</a> ·
+        Données © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> ·
         Routage <a href="http://project-osrm.org/" target="_blank" rel="noreferrer">OSRM</a>
       </footer>
     </div>
   </section>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js"></script>
-  <script src="tolls.js?v=7"></script>
-  <script src="app.js?v=7"></script>
+  <script src="tolls.js?v=8"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>

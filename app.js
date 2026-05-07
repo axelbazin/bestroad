@@ -1,11 +1,16 @@
 /* BestRoad — simulateur d'itinéraire
- * Carte: Leaflet + tuiles OpenStreetMap
+ * Carte: MapLibre GL + style OpenFreeMap Liberty (vector, sans clé)
  * Géocodage: Nominatim (OSM)
  * Routage: OSRM public demo (alternatives=true)
  */
 
 const OSRM_BASE = "https://router.project-osrm.org";
 const NOMINATIM_BASE = "https://nominatim.openstreetmap.org";
+const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
+
+const ROUTE_SRC = "br-routes";
+const ROUTE_HALO_LAYER = "br-routes-halo";
+const ROUTE_LINE_LAYER = "br-routes-line";
 
 const ROUTE_STYLES = {
   fast:  { color: "#3b82f6", label: "Le plus rapide",        emoji: "⚡" },
@@ -16,41 +21,396 @@ const ROUTE_STYLES = {
 
 const state = {
   map: null,
+  styleLoaded: false,
   routes: [],
   analyses: [],
-  layers: [],
   boothMarkers: [],
   markers: { from: null, to: null },
   points: { from: null, to: null },
   activeIndex: null,
-  view: "form", // 'form' | 'loading' | 'results' | 'roadbook'
+  view: "form",
   roadbookIndex: null,
+  geo: { watchId: null, marker: null, lastPos: null, follow: false, autoPitch: true },
 };
 
 /* ---------------- Map ---------------- */
 
 function initMap() {
-  state.map = L.map("map", { zoomControl: true }).setView([46.6, 2.5], 6);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: "&copy; OpenStreetMap",
-  }).addTo(state.map);
+  state.map = new maplibregl.Map({
+    container: "map",
+    style: MAP_STYLE,
+    center: [2.5, 46.6],
+    zoom: 5,
+    pitch: 0,
+    bearing: 0,
+    attributionControl: false,
+    cooperativeGestures: false,
+  });
+
+  state.map.addControl(new maplibregl.AttributionControl({ compact: true }), "top-right");
+  state.map.addControl(
+    new maplibregl.NavigationControl({ visualizePitch: true, showCompass: true }),
+    "top-right"
+  );
+
+  state.map.on("load", () => {
+    state.styleLoaded = true;
+    add3DBuildings();
+    setupAutoPitch();
+    // Si des routes étaient en attente d'affichage, on les pousse maintenant.
+    if (state.pendingRoutes) {
+      drawRoutes(state.pendingRoutes.routes, state.pendingRoutes.tags);
+      state.pendingRoutes = null;
+    }
+  });
+
+  state.map.on("error", (e) => {
+    console.warn("[map]", e.error || e);
+  });
+}
+
+function add3DBuildings() {
+  const m = state.map;
+  // OFM Liberty source = "openmaptiles". Si absent, on tente "maptiler_planet".
+  const styleSources = m.getStyle().sources || {};
+  let sourceName = null;
+  for (const [name, src] of Object.entries(styleSources)) {
+    if (src.type === "vector" && (name === "openmaptiles" || /openmaptiles|planet|tiles/i.test(name))) {
+      sourceName = name;
+      break;
+    }
+  }
+  if (!sourceName) return;
+
+  const layers = m.getStyle().layers || [];
+  // Insère les bâtiments 3D juste avant le premier layer de symboles (labels)
+  // pour ne pas masquer les noms de villes.
+  const beforeLayer = layers.find((l) => l.type === "symbol");
+
+  if (m.getLayer("br-3d-buildings")) m.removeLayer("br-3d-buildings");
+
+  m.addLayer(
+    {
+      id: "br-3d-buildings",
+      source: sourceName,
+      "source-layer": "building",
+      type: "fill-extrusion",
+      minzoom: 13,
+      paint: {
+        "fill-extrusion-color": [
+          "interpolate", ["linear"], ["zoom"],
+          13, "#3a4769",
+          16, "#5a6a95",
+          18, "#7886b0",
+        ],
+        "fill-extrusion-height": [
+          "interpolate", ["linear"], ["zoom"],
+          13, 0,
+          15, ["coalesce", ["get", "render_height"], ["get", "height"], 5],
+        ],
+        "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
+        "fill-extrusion-opacity": 0.85,
+      },
+    },
+    beforeLayer ? beforeLayer.id : undefined
+  );
+}
+
+function targetPitchForZoom(z) {
+  // 0° en dessous de zoom 12, montée progressive jusqu'à 55° à zoom 17+
+  if (z <= 12) return 0;
+  if (z >= 17) return 55;
+  return ((z - 12) / 5) * 55;
+}
+
+function setupAutoPitch() {
+  state.map.on("pitchstart", (e) => {
+    if (e.originalEvent) state.geo.autoPitch = false;
+  });
+  state.map.on("zoomend", () => {
+    if (!state.geo.autoPitch) return;
+    const target = targetPitchForZoom(state.map.getZoom());
+    if (Math.abs(state.map.getPitch() - target) > 1) {
+      state.map.easeTo({ pitch: target, duration: 350 });
+    }
+  });
 }
 
 function clearLayers() {
-  state.layers.forEach((l) => state.map.removeLayer(l));
-  state.layers = [];
+  if (!state.map || !state.styleLoaded) return;
+  for (const id of [ROUTE_LINE_LAYER, ROUTE_HALO_LAYER]) {
+    if (state.map.getLayer(id)) state.map.removeLayer(id);
+  }
+  if (state.map.getSource(ROUTE_SRC)) state.map.removeSource(ROUTE_SRC);
+}
+
+function fitToRoutes(routes) {
+  let minLon = 180, maxLon = -180, minLat = 90, maxLat = -90;
+  for (const r of routes) {
+    for (const [lon, lat] of r.geometry.coordinates) {
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    }
+  }
+  if (minLon > maxLon) return;
+  state.map.fitBounds([[minLon, minLat], [maxLon, maxLat]], {
+    padding: { top: 60, bottom: Math.round(window.innerHeight * 0.5), left: 40, right: 40 },
+    duration: 700,
+    pitch: 0,
+  });
+  state.geo.autoPitch = true;
+}
+
+function drawRoutes(routes, tags) {
+  if (!state.map) return;
+  if (!state.styleLoaded) {
+    state.pendingRoutes = { routes, tags };
+    return;
+  }
+  clearLayers();
+
+  const features = routes.map((r, i) => ({
+    type: "Feature",
+    id: i,
+    properties: {
+      idx: i,
+      tag: tags[i],
+      color: ROUTE_STYLES[tags[i]].color,
+    },
+    geometry: r.geometry,
+  }));
+
+  state.map.addSource(ROUTE_SRC, {
+    type: "geojson",
+    data: { type: "FeatureCollection", features },
+  });
+
+  state.map.addLayer({
+    id: ROUTE_HALO_LAYER,
+    source: ROUTE_SRC,
+    type: "line",
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": "#0b1226",
+      "line-width": [
+        "case", ["boolean", ["feature-state", "active"], false], 13, 9,
+      ],
+      "line-opacity": 0.45,
+    },
+  });
+
+  state.map.addLayer({
+    id: ROUTE_LINE_LAYER,
+    source: ROUTE_SRC,
+    type: "line",
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": ["get", "color"],
+      "line-width": [
+        "case", ["boolean", ["feature-state", "active"], false], 7, 5,
+      ],
+      "line-opacity": [
+        "case", ["boolean", ["feature-state", "active"], false], 1.0, 0.55,
+      ],
+    },
+  });
+
+  // Click sur une route → la sélectionne
+  state.map.on("click", ROUTE_LINE_LAYER, (e) => {
+    const f = e.features?.[0];
+    if (f && typeof f.id === "number") selectRoute(f.id);
+  });
+  state.map.on("mouseenter", ROUTE_LINE_LAYER, () => state.map.getCanvas().style.cursor = "pointer");
+  state.map.on("mouseleave", ROUTE_LINE_LAYER, () => state.map.getCanvas().style.cursor = "");
+
+  fitToRoutes(routes);
 }
 
 function setMarker(kind, lat, lon, label) {
-  if (state.markers[kind]) state.map.removeLayer(state.markers[kind]);
-  const icon = L.divIcon({
-    className: "br-marker",
-    html: `<div style="background:${kind === "from" ? "#fbbf24" : "#22c55e"};color:#0b1226;font-weight:700;border-radius:999px;padding:4px 9px;border:2px solid #0b1226;box-shadow:0 2px 6px rgba(0,0,0,.4);">${kind === "from" ? "A" : "B"}</div>`,
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
+  if (state.markers[kind]) {
+    state.markers[kind].setLngLat([lon, lat]);
+    return;
+  }
+  const el = document.createElement("div");
+  el.className = `endpoint-marker endpoint-${kind}`;
+  el.textContent = kind === "from" ? "A" : "B";
+  el.title = label || "";
+  state.markers[kind] = new maplibregl.Marker({ element: el, anchor: "center" })
+    .setLngLat([lon, lat])
+    .addTo(state.map);
+}
+
+function selectRoute(index) {
+  state.activeIndex = index;
+  if (state.routes.length && state.styleLoaded && state.map.getSource(ROUTE_SRC)) {
+    state.routes.forEach((_, i) => {
+      state.map.setFeatureState(
+        { source: ROUTE_SRC, id: i },
+        { active: i === index }
+      );
+    });
+  }
+  document.querySelectorAll(".route-card").forEach((el) => {
+    el.classList.toggle("active", parseInt(el.dataset.index, 10) === index);
   });
-  state.markers[kind] = L.marker([lat, lon], { icon, title: label }).addTo(state.map);
+  renderTollPins(index);
+}
+
+function clearTollPins() {
+  state.boothMarkers.forEach((m) => m.remove());
+  state.boothMarkers = [];
+}
+
+function renderTollPins(routeIndex) {
+  clearTollPins();
+  if (routeIndex == null) return;
+  const booths = state.analyses?.[routeIndex]?.booths || [];
+  for (const b of booths) {
+    const el = document.createElement("div");
+    el.className = "toll-pin-wrap";
+    el.innerHTML = `<div class="toll-pin">€</div>`;
+    const marker = new maplibregl.Marker({ element: el, anchor: "bottom" })
+      .setLngLat([b.lon, b.lat]);
+    if (b.name || b.operator) {
+      const opLabel = window.BR_Tolls?.OPERATOR_LABELS?.[b.operator] || b.operator || "Péage";
+      marker.setPopup(
+        new maplibregl.Popup({ closeButton: false, offset: 18 }).setHTML(
+          `<div style="font-family:inherit;color:#0f172a"><b>${escapeHtml(b.name || "Péage")}</b><br><span style="color:#64748b;font-size:12px">${escapeHtml(opLabel)}</span></div>`
+        )
+      );
+    }
+    marker.addTo(state.map);
+    state.boothMarkers.push(marker);
+  }
+}
+
+/* ---------------- Geolocation ---------------- */
+
+function geolocateOnce() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error("Géolocalisation non supportée"));
+    navigator.geolocation.getCurrentPosition(
+      resolve,
+      (err) => reject(new Error(geoErrorMessage(err))),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+    );
+  });
+}
+
+function geoErrorMessage(err) {
+  if (!err) return "Erreur de géolocalisation";
+  if (err.code === 1) return "Localisation refusée. Active-la dans les réglages.";
+  if (err.code === 2) return "Position indisponible.";
+  if (err.code === 3) return "La géolocalisation a expiré.";
+  return err.message || "Erreur de géolocalisation";
+}
+
+async function fillFromMyLocation() {
+  const btn = document.getElementById("locate-input");
+  if (btn) btn.classList.add("loading");
+  try {
+    const pos = await geolocateOnce();
+    const { latitude, longitude } = pos.coords;
+    let label = `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+    try {
+      const url = `${NOMINATIM_BASE}/reverse?format=json&lat=${latitude}&lon=${longitude}`;
+      const res = await fetch(url, { headers: { "Accept-Language": "fr" } });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.display_name) label = data.display_name;
+      }
+    } catch (_) {}
+    state.points.from = { lat: latitude, lon: longitude, label };
+    document.getElementById("from").value = label;
+    setMarker("from", latitude, longitude, label);
+    state.map.flyTo({ center: [longitude, latitude], zoom: 13, pitch: targetPitchForZoom(13), duration: 900 });
+    state.geo.autoPitch = true;
+    setStatus("");
+  } catch (e) {
+    setStatus(e.message, true);
+  } finally {
+    if (btn) btn.classList.remove("loading");
+  }
+}
+
+function ensureUserMarker(lat, lon, heading) {
+  if (!state.geo.marker) {
+    const wrap = document.createElement("div");
+    wrap.className = "user-location";
+    wrap.innerHTML = `
+      <div class="user-accuracy"></div>
+      <div class="user-dot"></div>
+    `;
+    state.geo.marker = new maplibregl.Marker({ element: wrap, anchor: "center" })
+      .setLngLat([lon, lat])
+      .addTo(state.map);
+  } else {
+    state.geo.marker.setLngLat([lon, lat]);
+  }
+  if (typeof heading === "number" && !Number.isNaN(heading)) {
+    const dot = state.geo.marker.getElement().querySelector(".user-dot");
+    if (dot) dot.style.setProperty("--heading", `${heading}deg`);
+    state.geo.marker.getElement().classList.add("has-heading");
+  } else {
+    state.geo.marker.getElement().classList.remove("has-heading");
+  }
+}
+
+function startWatchPosition() {
+  if (!navigator.geolocation || state.geo.watchId != null) return;
+  state.geo.watchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      state.geo.lastPos = pos;
+      const { latitude, longitude, heading } = pos.coords;
+      ensureUserMarker(latitude, longitude, heading);
+      if (state.geo.follow) {
+        state.map.easeTo({ center: [longitude, latitude], duration: 600 });
+      }
+    },
+    (err) => {
+      console.warn("[geo]", err);
+      setStatus(geoErrorMessage(err), true);
+      stopFollow();
+    },
+    { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 }
+  );
+}
+
+function stopFollow() {
+  state.geo.follow = false;
+  document.getElementById("locate-btn")?.classList.remove("active");
+}
+
+async function toggleFollow() {
+  const btn = document.getElementById("locate-btn");
+  if (!btn) return;
+
+  if (state.geo.follow) {
+    stopFollow();
+    return;
+  }
+
+  btn.classList.add("loading");
+  try {
+    if (!state.geo.lastPos) {
+      const pos = await geolocateOnce();
+      state.geo.lastPos = pos;
+      const { latitude, longitude, heading } = pos.coords;
+      ensureUserMarker(latitude, longitude, heading);
+    }
+    state.geo.follow = true;
+    btn.classList.add("active");
+    startWatchPosition();
+    const { latitude, longitude } = state.geo.lastPos.coords;
+    state.map.flyTo({ center: [longitude, latitude], zoom: 15, pitch: targetPitchForZoom(15), duration: 900 });
+    state.geo.autoPitch = true;
+  } catch (e) {
+    setStatus(e.message, true);
+  } finally {
+    btn.classList.remove("loading");
+  }
 }
 
 /* ---------------- Geocoding ---------------- */
@@ -188,28 +548,6 @@ function fmtLiters(l) {
   return `${l.toFixed(2)} L`;
 }
 
-function drawRoutes(routes, tags) {
-  clearLayers();
-  routes.forEach((r, i) => {
-    const tag = tags[i];
-    const style = ROUTE_STYLES[tag];
-    const latlngs = r.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
-    const halo = L.polyline(latlngs, { color: "#0b1226", weight: 9, opacity: 0.35 }).addTo(state.map);
-    const line = L.polyline(latlngs, {
-      color: style.color,
-      weight: 5,
-      opacity: tag === "alt" ? 0.55 : 0.9,
-      lineCap: "round",
-      lineJoin: "round",
-    }).addTo(state.map);
-    line.on("click", () => selectRoute(i));
-    state.layers.push(halo, line);
-  });
-
-  const allPoints = routes.flatMap((r) => r.geometry.coordinates.map(([lon, lat]) => [lat, lon]));
-  if (allPoints.length) state.map.fitBounds(L.latLngBounds(allPoints).pad(0.15));
-}
-
 function renderResults(routes, tags, { tollsLoading = false, tollsFailed = false } = {}) {
   const container = document.getElementById("results");
   container.innerHTML = "";
@@ -270,54 +608,6 @@ function renderResults(routes, tags, { tollsLoading = false, tollsFailed = false
       openRoadbook(i);
     });
     container.appendChild(card);
-  });
-}
-
-function selectRoute(index) {
-  state.activeIndex = index;
-  // Met en valeur la polyligne sélectionnée
-  state.layers.forEach((l) => {
-    if (l.options && l.options.weight === 5) l.setStyle({ weight: 5, opacity: 0.45 });
-  });
-  // chaque route a 2 layers (halo + line), donc index*2+1
-  const line = state.layers[index * 2 + 1];
-  if (line) {
-    line.setStyle({ weight: 7, opacity: 1 });
-    line.bringToFront();
-  }
-  document.querySelectorAll(".route-card").forEach((el) => {
-    el.classList.toggle("active", parseInt(el.dataset.index, 10) === index);
-  });
-  renderTollPins(index);
-}
-
-function clearTollPins() {
-  state.boothMarkers.forEach((m) => state.map.removeLayer(m));
-  state.boothMarkers = [];
-}
-
-function renderTollPins(routeIndex) {
-  clearTollPins();
-  if (routeIndex == null) return;
-  const analysis = state.analyses?.[routeIndex];
-  const booths = analysis?.booths || [];
-  booths.forEach((b) => {
-    const icon = L.divIcon({
-      className: "toll-marker",
-      html: `<div class="toll-pin">€</div>`,
-      iconSize: [26, 26],
-      iconAnchor: [13, 13],
-    });
-    const marker = L.marker([b.lat, b.lon], {
-      icon,
-      title: b.name || (b.operator ? `Péage ${b.operator}` : "Péage"),
-    }).addTo(state.map);
-    if (b.name) {
-      marker.bindPopup(
-        `<div style="font-family:inherit"><b>${b.name}</b><br><span style="color:#94a3b8;font-size:12px">${b.operator ? "Concessionnaire " + b.operator : "Péage"}</span></div>`
-      );
-    }
-    state.boothMarkers.push(marker);
   });
 }
 
@@ -677,7 +967,7 @@ function setSnap(sheet, name, { animate = true } = {}) {
     requestAnimationFrame(() => sheet.classList.remove("dragging"));
   }
   if (state.map) {
-    setTimeout(() => state.map.invalidateSize(), 320);
+    setTimeout(() => state.map.resize(), 320);
   }
   updatePeekSummary();
 }
@@ -734,7 +1024,7 @@ function initBottomSheet() {
     const target = nearestSnap(currentPx, snaps);
     sheet.style.transform = "";
     sheet.dataset.snap = target;
-    if (state.map) setTimeout(() => state.map.invalidateSize(), 320);
+    if (state.map) setTimeout(() => state.map.resize(), 320);
     updatePeekSummary();
   }
 
@@ -765,7 +1055,7 @@ function initBottomSheet() {
   // Recompute on resize
   window.addEventListener("resize", () => {
     sheet.style.transform = "";
-    if (state.map) state.map.invalidateSize();
+    if (state.map) state.map.resize();
   });
 }
 
@@ -822,6 +1112,20 @@ function boot() {
         if (evt === "click") goBack();
       })
     );
+  }
+
+  const locateInput = document.getElementById("locate-input");
+  if (locateInput) {
+    locateInput.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      fillFromMyLocation();
+    });
+  }
+
+  const locateBtn = document.getElementById("locate-btn");
+  if (locateBtn) {
+    locateBtn.addEventListener("click", () => toggleFollow());
   }
 
   // Pré-remplit avec un exemple sympa

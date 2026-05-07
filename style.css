@@ -46,10 +46,129 @@ body {
   background: #0b1226;
 }
 
-.leaflet-container { background: #0b1226; }
-.leaflet-control-attribution { font-size: 10px; opacity: 0.7; }
-.leaflet-bottom { bottom: calc(var(--peek-h) + 4px); }
-.leaflet-top { top: calc(env(safe-area-inset-top, 0px) + 8px); }
+/* MapLibre overrides */
+.maplibregl-ctrl-attrib {
+  font-size: 10px;
+  opacity: 0.85;
+  background: rgba(255, 255, 255, 0.7) !important;
+}
+.maplibregl-ctrl-bottom-right,
+.maplibregl-ctrl-bottom-left {
+  bottom: calc(var(--peek-h) + 4px) !important;
+}
+.maplibregl-ctrl-top-right,
+.maplibregl-ctrl-top-left {
+  top: calc(env(safe-area-inset-top, 0px) + 8px) !important;
+}
+.maplibregl-canvas-container { cursor: grab; }
+.maplibregl-canvas-container:active { cursor: grabbing; }
+
+/* Endpoint markers (A / B) */
+.endpoint-marker {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 14px;
+  border: 3px solid #0b1226;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+  letter-spacing: 0.5px;
+}
+
+.endpoint-from {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #1a1300;
+}
+
+.endpoint-to {
+  background: var(--eco);
+  color: #0b2417;
+}
+
+/* Floating action button (locate / follow) */
+.map-fab {
+  position: absolute;
+  right: 14px;
+  bottom: calc(var(--peek-h) + env(safe-area-inset-bottom, 0px) + 14px);
+  z-index: 5;
+  width: 50px;
+  height: 50px;
+  border-radius: 999px;
+  background: white;
+  color: #0f172a;
+  border: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  cursor: pointer;
+  transition: transform 0.15s, background 0.2s, color 0.2s;
+}
+
+.map-fab .fab-icon { display: block; }
+.map-fab:active { transform: scale(0.94); }
+.map-fab.active {
+  background: var(--accent);
+  color: #1a1300;
+}
+.map-fab.loading .fab-icon {
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* User position marker (live GPS) */
+.user-location {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.user-accuracy {
+  position: absolute;
+  inset: -10px;
+  border-radius: 50%;
+  background: rgba(59, 130, 246, 0.22);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  animation: ping 2s ease-out infinite;
+}
+
+@keyframes ping {
+  0% { transform: scale(0.7); opacity: 0.85; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+.user-dot {
+  width: 18px;
+  height: 18px;
+  background: #3b82f6;
+  border: 3px solid white;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px #1d4ed8, 0 4px 10px rgba(0, 0, 0, 0.4);
+  position: relative;
+  z-index: 1;
+}
+
+.user-location.has-heading .user-dot::before {
+  content: "";
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 10px solid #3b82f6;
+  transform: translateX(-50%) rotate(var(--heading, 0));
+  transform-origin: 50% 18px;
+}
 
 /* ---------------- Bottom sheet ---------------- */
 
@@ -404,32 +523,41 @@ body {
 .step--toll .step-body .step-title { color: var(--text); }
 .step--toll .step-meta { color: var(--cheap); }
 
-/* ---------------- Toll booth pin (Leaflet divIcon) ---------------- */
+/* ---------------- Toll booth pin (MapLibre marker) ---------------- */
 
-.toll-marker { background: transparent; border: none; }
+.toll-pin-wrap {
+  position: relative;
+  width: 28px;
+  height: 36px;
+  pointer-events: auto;
+}
 
 .toll-pin {
-  width: 26px;
-  height: 26px;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 28px;
+  height: 28px;
   border-radius: 999px;
   background: var(--cheap);
   color: white;
   font-weight: 800;
-  font-size: 12px;
+  font-size: 13px;
   display: grid;
   place-items: center;
   border: 2px solid #0b1226;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.55);
-  letter-spacing: 0;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.6);
+  cursor: pointer;
 }
 
-.toll-pin::after {
+.toll-pin-wrap::after {
   content: "";
   position: absolute;
+  bottom: 0;
   left: 50%;
-  bottom: -6px;
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
   background: var(--cheap);
   transform: translateX(-50%) rotate(45deg);
   border-right: 2px solid #0b1226;
@@ -456,6 +584,33 @@ body {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.field-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.field-row > input { flex: 1 1 auto; min-width: 0; }
+
+.field-btn {
+  flex: 0 0 auto;
+  width: 46px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--accent);
+  border-radius: 10px;
+  font-size: 18px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  display: grid;
+  place-items: center;
+}
+
+.field-btn:active { background: var(--panel); transform: scale(0.95); }
+.field-btn.loading {
+  animation: pulse 1s ease-in-out infinite;
 }
 
 .field input,
@@ -756,5 +911,7 @@ body {
     padding: 4px 18px 16px;
   }
 
-  .leaflet-bottom { bottom: 0 !important; }
+  .maplibregl-ctrl-bottom-right,
+  .maplibregl-ctrl-bottom-left { bottom: 0 !important; }
+  .map-fab { bottom: 28px; right: 28px; }
 }
