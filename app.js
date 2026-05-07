@@ -17,6 +17,7 @@ const ROUTE_STYLES = {
 const state = {
   map: null,
   routes: [],
+  analyses: [],
   layers: [],
   markers: { from: null, to: null },
   points: { from: null, to: null },
@@ -109,49 +110,38 @@ async function fetchRoutes(from, to, profile) {
 /* ---------------- Cost model ---------------- */
 
 /**
- * Estime la part autoroutière à partir de la vitesse moyenne.
- * Approximation simple: les itinéraires très rapides (>90 km/h moyens)
- * sont majoritairement sur autoroute; les lents (<55 km/h) ne le sont pas.
+ * Surconsommation à haute vitesse (autoroute) vs route urbaine.
+ * On utilise la vitesse moyenne comme proxy: jusqu'à +18 % à 100+ km/h.
  */
-function estimateMotorwayShare(distanceKm, durationH) {
-  if (durationH <= 0) return 0;
-  const avg = distanceKm / durationH;
-  if (avg >= 100) return 0.9;
-  if (avg >= 85) return 0.7;
-  if (avg >= 70) return 0.4;
-  if (avg >= 55) return 0.2;
-  return 0.05;
+function highSpeedConsumptionFactor(avgKmh) {
+  const fastShare = Math.max(0, Math.min(1, (avgKmh - 50) / 50));
+  return 1 + 0.18 * fastShare;
 }
 
-/**
- * Conso plus élevée à haute vitesse (autoroute) qu'en route nationale.
- * Facteur multiplicatif appliqué à la conso de base.
- */
-function consumptionFactor(motorwayShare) {
-  return 1 + 0.18 * motorwayShare;
-}
-
-function computeMetrics(route, vehicle) {
+function computeMetrics(route, vehicle, tolls) {
   const distanceKm = route.distance / 1000;
   const durationH = route.duration / 3600;
-  const motorwayShare = vehicle.type === "car" ? estimateMotorwayShare(distanceKm, durationH) : 0;
-  const motorwayKm = distanceKm * motorwayShare;
+  const avgKmh = durationH > 0 ? distanceKm / durationH : 0;
 
   const fuelL = vehicle.type === "car"
-    ? (distanceKm / 100) * vehicle.consumption * consumptionFactor(motorwayShare)
+    ? (distanceKm / 100) * vehicle.consumption * highSpeedConsumptionFactor(avgKmh)
     : 0;
   const fuelCost = fuelL * vehicle.fuelPrice;
-  const tollCost = (motorwayKm / 100) * vehicle.tollRate;
+
+  const tollCost = vehicle.type === "car" && tolls ? tolls.totalCost : 0;
+  const tolledKm = tolls ? tolls.tolledKm : 0;
+  const tollBreakdown = tolls ? tolls.breakdown || {} : {};
   const totalCost = fuelCost + tollCost;
 
   return {
     distanceKm,
     durationH,
-    motorwayShare,
-    motorwayKm,
+    avgKmh,
     fuelL,
     fuelCost,
     tollCost,
+    tolledKm,
+    tollBreakdown,
     totalCost,
   };
 }
@@ -225,10 +215,21 @@ function renderResults(routes, tags) {
   const order = ["cheap", "eco", "fast", "alt"];
   const indices = routes.map((_, i) => i).sort((a, b) => order.indexOf(tags[a]) - order.indexOf(tags[b]));
 
+  const labels = (window.BR_Tolls && window.BR_Tolls.OPERATOR_LABELS) || {};
+
   indices.forEach((i) => {
     const tag = tags[i];
     const style = ROUTE_STYLES[tag];
     const m = routes[i].metrics;
+
+    const breakdownEntries = Object.entries(m.tollBreakdown || {})
+      .sort((a, b) => b[1].cost - a[1].cost);
+    const breakdownHtml = breakdownEntries.length
+      ? `<div class="breakdown">${breakdownEntries
+          .map(([op, v]) => `<span class="chip"><b>${labels[op] || op}</b> · ${v.km.toFixed(0)} km · ${fmtMoney(v.cost)}</span>`)
+          .join("")}</div>`
+      : "";
+
     const card = document.createElement("div");
     card.className = `route-card ${tag}`;
     card.dataset.index = i;
@@ -240,11 +241,12 @@ function renderResults(routes, tags) {
       <div class="stats">
         <div class="stat"><span class="label">Durée</span><span class="value">${fmtDuration(m.durationH)}</span></div>
         <div class="stat"><span class="label">Distance</span><span class="value">${fmtKm(m.distanceKm)}</span></div>
-        <div class="stat"><span class="label">Carburant</span><span class="value">${fmtLiters(m.fuelL)}</span></div>
+        <div class="stat"><span class="label">Carburant</span><span class="value">${fmtLiters(m.fuelL)} · ${fmtMoney(m.fuelCost)}</span></div>
+        <div class="stat"><span class="label">Péages</span><span class="value">${fmtMoney(m.tollCost)} · ${m.tolledKm.toFixed(0)} km</span></div>
         <div class="stat"><span class="label">Coût total</span><span class="value">${fmtMoney(m.totalCost)}</span></div>
-        <div class="stat"><span class="label">Péages estimés</span><span class="value">${fmtMoney(m.tollCost)}</span></div>
-        <div class="stat"><span class="label">Part autoroute</span><span class="value">${Math.round(m.motorwayShare * 100)}%</span></div>
+        <div class="stat"><span class="label">Vitesse moy.</span><span class="value">${m.avgKmh.toFixed(0)} km/h</span></div>
       </div>
+      ${breakdownHtml}
     `;
     card.addEventListener("click", () => selectRoute(i));
     container.appendChild(card);
@@ -274,7 +276,6 @@ function readVehicle() {
   return {
     consumption: parseFloat(document.getElementById("consumption").value) || 6.5,
     fuelPrice: parseFloat(document.getElementById("fuelPrice").value) || 1.85,
-    tollRate: parseFloat(document.getElementById("tollRate").value) || 9.5,
     type: document.getElementById("vehicleType").value,
   };
 }
@@ -300,7 +301,7 @@ async function ensurePoint(kind) {
 async function runSearch() {
   const btn = document.getElementById("search");
   btn.disabled = true;
-  setStatus("Calcul en cours…");
+  setStatus("Recherche d'itinéraires…");
 
   try {
     const vehicle = readVehicle();
@@ -308,18 +309,32 @@ async function runSearch() {
     const [from, to] = await Promise.all([ensurePoint("from"), ensurePoint("to")]);
 
     const rawRoutes = await fetchRoutes(from, to, profile);
-    const routes = rawRoutes.map((r) => ({ ...r, metrics: computeMetrics(r, vehicle) }));
+
+    let analyses = rawRoutes.map(() => null);
+    if (vehicle.type === "car" && window.BR_Tolls) {
+      setStatus(`Détection des péages sur ${rawRoutes.length} itinéraire${rawRoutes.length > 1 ? "s" : ""}…`);
+      try {
+        analyses = await window.BR_Tolls.analyzeRoutes(rawRoutes);
+      } catch (e) {
+        console.warn("Analyse des péages indisponible :", e);
+        setStatus("Péages indisponibles (Overpass injoignable). Distances et carburant calculés.", true);
+      }
+    }
+
+    const routes = rawRoutes.map((r, i) => ({ ...r, metrics: computeMetrics(r, vehicle, analyses[i]) }));
     state.routes = routes;
+    state.analyses = analyses;
     const tags = rankRoutes(routes);
 
     drawRoutes(routes, tags);
     renderResults(routes, tags);
 
-    // Sélectionne par défaut le moins cher
     const cheapIdx = tags.indexOf("cheap");
     selectRoute(cheapIdx >= 0 ? cheapIdx : 0);
 
-    setStatus(`${routes.length} itinéraire${routes.length > 1 ? "s" : ""} trouvé${routes.length > 1 ? "s" : ""}.`);
+    if (!document.getElementById("status").classList.contains("error")) {
+      setStatus(`${routes.length} itinéraire${routes.length > 1 ? "s" : ""} comparé${routes.length > 1 ? "s" : ""}.`);
+    }
   } catch (e) {
     console.error(e);
     setStatus(e.message || "Erreur inattendue", true);
@@ -341,11 +356,14 @@ function boot() {
   document.getElementById("to").value = "Lyon, France";
 
   // Réagit aux changements de paramètres véhicule (recalcule sans re-router)
-  ["consumption", "fuelPrice", "tollRate"].forEach((id) => {
+  ["consumption", "fuelPrice"].forEach((id) => {
     document.getElementById(id).addEventListener("change", () => {
       if (!state.routes.length) return;
       const vehicle = readVehicle();
-      state.routes = state.routes.map((r) => ({ ...r, metrics: computeMetrics(r, vehicle) }));
+      state.routes = state.routes.map((r, i) => ({
+        ...r,
+        metrics: computeMetrics(r, vehicle, state.analyses?.[i]),
+      }));
       const tags = rankRoutes(state.routes);
       drawRoutes(state.routes, tags);
       renderResults(state.routes, tags);

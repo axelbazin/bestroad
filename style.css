@@ -271,6 +271,28 @@ body {
   font-weight: 600;
 }
 
+.breakdown {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #0b1226;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.chip b {
+  color: var(--text);
+  font-weight: 600;
+  margin-right: 4px;
+}
+
 .legal {
   margin-top: auto;
   font-size: 11px;
