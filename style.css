@@ -107,7 +107,29 @@ body {
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
+  position: relative;
 }
+
+.peek-back {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  margin: 0;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.peek-back:active { transform: scale(0.94); background: var(--panel); }
+.peek-back[hidden] { display: none; }
 
 .peek-icon {
   width: 38px;
@@ -164,6 +186,254 @@ body {
   gap: 14px;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
+}
+
+.view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.view[hidden] { display: none; }
+
+/* ---------------- Loader ---------------- */
+
+.loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 36px 18px 24px;
+}
+
+.loader-track {
+  position: relative;
+  width: 100%;
+  max-width: 320px;
+  height: 44px;
+}
+
+.loader-track-bg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 26px;
+  transform: translateY(-50%);
+  background: #1a2750;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.loader-track-dashes {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 50%;
+  height: 3px;
+  transform: translateY(-50%);
+  background-image: linear-gradient(90deg, var(--accent) 50%, transparent 50%);
+  background-size: 22px 3px;
+  border-radius: 2px;
+  animation: dashes 0.55s linear infinite;
+}
+
+@keyframes dashes {
+  from { background-position: 0 0; }
+  to   { background-position: 22px 0; }
+}
+
+.loader-car {
+  position: absolute;
+  top: -6px;
+  font-size: 28px;
+  animation: drive 2.4s ease-in-out infinite;
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.4));
+}
+
+@keyframes drive {
+  0%   { left: 4%;  transform: translateY(0) scaleX(1); }
+  45%  { left: 80%; transform: translateY(0) scaleX(1); }
+  50%  { left: 80%; transform: translateY(0) scaleX(-1); }
+  95%  { left: 4%;  transform: translateY(0) scaleX(-1); }
+  100% { left: 4%;  transform: translateY(0) scaleX(1); }
+}
+
+.loader-text {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: center;
+}
+
+.loader-sub {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ---------------- Roadbook ---------------- */
+
+.roadbook {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.roadbook-summary {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.roadbook-summary .title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.roadbook-summary .meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.roadbook-summary .meta span b { color: var(--text); font-weight: 600; }
+
+.roadbook-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.step {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  padding: 10px 0 12px 0;
+}
+
+.step + .step::before {
+  content: "";
+  position: absolute;
+  left: 17px;
+  top: -6px;
+  bottom: 100%;
+  width: 2px;
+  background: var(--border);
+}
+
+.step::after {
+  content: "";
+  position: absolute;
+  left: 17px;
+  top: 36px;
+  bottom: -6px;
+  width: 2px;
+  background: var(--border);
+}
+
+.step:last-child::after { display: none; }
+
+.step-icon {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  position: relative;
+  z-index: 1;
+}
+
+.step--depart .step-icon { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-color: var(--accent-2); color: #1a1300; }
+.step--arrive .step-icon { background: var(--eco); border-color: var(--eco); color: #0b2417; }
+.step--toll   .step-icon { background: var(--cheap); border-color: var(--cheap); color: white; font-weight: 700; }
+
+.step-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.step-title {
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.step-meta {
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.shield {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+  border: 2px solid white;
+  box-shadow: 0 1px 2px rgba(0,0,0,.3);
+}
+
+.shield--motorway { background: #c8161d; color: white; }
+.shield--ramp { background: #3b82f6; color: white; }
+.shield--departementale { background: #fbbf24; color: #1a1300; }
+
+.step--toll .step-body .step-title { color: var(--text); }
+.step--toll .step-meta { color: var(--cheap); }
+
+/* ---------------- Toll booth pin (Leaflet divIcon) ---------------- */
+
+.toll-marker { background: transparent; border: none; }
+
+.toll-pin {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--cheap);
+  color: white;
+  font-weight: 800;
+  font-size: 12px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #0b1226;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.55);
+  letter-spacing: 0;
+}
+
+.toll-pin::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: 8px;
+  height: 8px;
+  background: var(--cheap);
+  transform: translateX(-50%) rotate(45deg);
+  border-right: 2px solid #0b1226;
+  border-bottom: 2px solid #0b1226;
 }
 
 /* ---------------- Form ---------------- */
@@ -397,6 +667,27 @@ body {
   color: var(--text);
   font-weight: 600;
   margin-right: 4px;
+}
+
+.route-card .roadbook-link {
+  margin-top: 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 10px;
+  border-radius: 8px;
+  width: 100%;
+  cursor: pointer;
+  text-align: center;
+  letter-spacing: 0.3px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.route-card .roadbook-link:active {
+  background: rgba(251, 191, 36, 0.1);
+  border-color: var(--accent);
 }
 
 .legal {

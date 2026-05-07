@@ -19,9 +19,12 @@ const state = {
   routes: [],
   analyses: [],
   layers: [],
+  boothMarkers: [],
   markers: { from: null, to: null },
   points: { from: null, to: null },
   activeIndex: null,
+  view: "form", // 'form' | 'loading' | 'results' | 'roadbook'
+  roadbookIndex: null,
 };
 
 /* ---------------- Map ---------------- */
@@ -99,7 +102,7 @@ function attachAutocomplete(inputId, suggestionsId, kind) {
 
 async function fetchRoutes(from, to, profile) {
   const coords = `${from.lon},${from.lat};${to.lon},${to.lat}`;
-  const url = `${OSRM_BASE}/route/v1/${profile}/${coords}?alternatives=3&overview=full&geometries=geojson&steps=false&annotations=true`;
+  const url = `${OSRM_BASE}/route/v1/${profile}/${coords}?alternatives=3&overview=full&geometries=geojson&steps=true&annotations=true`;
   const res = await fetch(url);
   if (!res.ok) throw new Error("Échec du routage");
   const json = await res.json();
@@ -247,8 +250,16 @@ function renderResults(routes, tags) {
         <div class="stat"><span class="label">Vitesse moy.</span><span class="value">${m.avgKmh.toFixed(0)} km/h</span></div>
       </div>
       ${breakdownHtml}
+      <button class="roadbook-link" data-index="${i}">Voir la feuille de route →</button>
     `;
-    card.addEventListener("click", () => selectRoute(i));
+    card.addEventListener("click", (ev) => {
+      if (ev.target instanceof HTMLElement && ev.target.classList.contains("roadbook-link")) return;
+      selectRoute(i);
+    });
+    card.querySelector(".roadbook-link").addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      openRoadbook(i);
+    });
     container.appendChild(card);
   });
 }
@@ -268,6 +279,269 @@ function selectRoute(index) {
   document.querySelectorAll(".route-card").forEach((el) => {
     el.classList.toggle("active", parseInt(el.dataset.index, 10) === index);
   });
+  renderTollPins(index);
+}
+
+function clearTollPins() {
+  state.boothMarkers.forEach((m) => state.map.removeLayer(m));
+  state.boothMarkers = [];
+}
+
+function renderTollPins(routeIndex) {
+  clearTollPins();
+  if (routeIndex == null) return;
+  const analysis = state.analyses?.[routeIndex];
+  const booths = analysis?.booths || [];
+  booths.forEach((b) => {
+    const icon = L.divIcon({
+      className: "toll-marker",
+      html: `<div class="toll-pin">€</div>`,
+      iconSize: [26, 26],
+      iconAnchor: [13, 13],
+    });
+    const marker = L.marker([b.lat, b.lon], {
+      icon,
+      title: b.name || (b.operator ? `Péage ${b.operator}` : "Péage"),
+    }).addTo(state.map);
+    if (b.name) {
+      marker.bindPopup(
+        `<div style="font-family:inherit"><b>${b.name}</b><br><span style="color:#94a3b8;font-size:12px">${b.operator ? "Concessionnaire " + b.operator : "Péage"}</span></div>`
+      );
+    }
+    state.boothMarkers.push(marker);
+  });
+}
+
+/* ---------------- View state machine ---------------- */
+
+const VIEWS = ["form", "loading", "results", "roadbook"];
+
+function showView(name) {
+  state.view = name;
+  for (const v of VIEWS) {
+    const el = document.getElementById(`view-${v}`);
+    if (el) el.hidden = v !== name;
+  }
+  const back = document.getElementById("peek-back");
+  if (back) back.hidden = name === "form";
+
+  const sheet = document.getElementById("sheet");
+  if (sheet && isMobileLayout()) {
+    if (name === "loading" || name === "roadbook") setSnap(sheet, "full");
+    else if (name === "results") setSnap(sheet, "mid");
+    else if (name === "form") setSnap(sheet, "mid");
+  }
+  updatePeekSummary();
+}
+
+function goBack() {
+  if (state.view === "roadbook") {
+    state.roadbookIndex = null;
+    showView("results");
+  } else if (state.view === "results" || state.view === "loading") {
+    clearTollPins();
+    showView("form");
+  }
+}
+
+function setLoaderText(title, sub) {
+  const t = document.getElementById("loader-text");
+  const s = document.getElementById("loader-sub");
+  if (t && title) t.textContent = title;
+  if (s && sub != null) s.textContent = sub;
+}
+
+/* ---------------- Roadbook ---------------- */
+
+const MANEUVER_ICONS = {
+  depart: "🚗",
+  arrive: "🏁",
+  "turn:left": "⬅️",
+  "turn:right": "➡️",
+  "turn:slight left": "↖️",
+  "turn:slight right": "↗️",
+  "turn:sharp left": "⤴️",
+  "turn:sharp right": "⤵️",
+  "turn:straight": "⬆️",
+  "turn:uturn": "↩️",
+  roundabout: "🔄",
+  rotary: "🔄",
+  "exit roundabout": "🔄",
+  "exit rotary": "🔄",
+  "on ramp": "↗️",
+  "off ramp": "↘️",
+  fork: "⑂",
+  merge: "🔀",
+  continue: "⬆️",
+  "new name": "⬆️",
+  notification: "ℹ️",
+  "use lane": "↔️",
+};
+
+function maneuverIcon(step) {
+  const m = step.maneuver;
+  if (!m) return "➡️";
+  if (m.type === "turn" && m.modifier) return MANEUVER_ICONS[`turn:${m.modifier}`] || "➡️";
+  return MANEUVER_ICONS[m.type] || "➡️";
+}
+
+function maneuverLabel(step) {
+  const m = step.maneuver;
+  if (!m) return "Continuer";
+  switch (m.type) {
+    case "depart": return "Départ";
+    case "arrive": return "Arrivée";
+    case "turn":
+      switch (m.modifier) {
+        case "left": return "Tourner à gauche";
+        case "right": return "Tourner à droite";
+        case "slight left": return "Légère gauche";
+        case "slight right": return "Légère droite";
+        case "sharp left": return "Virage serré à gauche";
+        case "sharp right": return "Virage serré à droite";
+        case "straight": return "Continuer tout droit";
+        case "uturn": return "Faire demi-tour";
+      }
+      return "Tourner";
+    case "roundabout":
+    case "rotary":
+      return m.exit ? `Au rond-point, prendre la sortie ${m.exit}` : "Au rond-point";
+    case "exit roundabout":
+    case "exit rotary": return "Sortir du rond-point";
+    case "merge": return "S'insérer";
+    case "on ramp": return "Prendre la bretelle d'entrée";
+    case "off ramp": return "Prendre la bretelle de sortie";
+    case "fork": return "Garder " + (m.modifier || "la bonne voie");
+    case "continue": return "Continuer";
+    case "new name": return "Continuer";
+    case "notification": return "Information";
+  }
+  return "Continuer";
+}
+
+function shieldFor(ref) {
+  if (!ref) return "";
+  const refs = String(ref).split(/[;,]/).map((r) => r.trim()).filter(Boolean);
+  return refs
+    .map((r) => {
+      const upper = r.toUpperCase().replace(/\s+/g, "");
+      let cls = "shield--departementale";
+      if (/^A\d/.test(upper)) cls = "shield--motorway";
+      else if (/^N\d/.test(upper)) cls = "shield--ramp";
+      return `<span class="shield ${cls}">${r}</span>`;
+    })
+    .join(" ");
+}
+
+function buildRoadbookItems(route, booths) {
+  const items = [];
+  // Aplatit les steps OSRM (toutes les legs, tous les steps)
+  const steps = [];
+  let cumulativeKm = 0;
+  for (const leg of route.legs || []) {
+    for (const step of leg.steps || []) {
+      const distanceKm = (step.distance || 0) / 1000;
+      const startKm = cumulativeKm;
+      cumulativeKm += distanceKm;
+      steps.push({
+        kind: "step",
+        atKm: startKm,
+        endKm: cumulativeKm,
+        step,
+      });
+    }
+  }
+  // Booths
+  for (const b of booths || []) {
+    items.push({ kind: "toll", atKm: b.distanceFromStartKm || 0, booth: b });
+  }
+  for (const s of steps) items.push(s);
+  items.sort((a, b) => a.atKm - b.atKm);
+  return items;
+}
+
+function renderRoadbook(routeIndex) {
+  const route = state.routes[routeIndex];
+  const analysis = state.analyses?.[routeIndex];
+  const m = route.metrics;
+  const booths = analysis?.booths || [];
+  const items = buildRoadbookItems(route, booths);
+  const fromLabel = (state.points.from?.label || "Départ").split(",")[0];
+  const toLabel = (state.points.to?.label || "Arrivée").split(",")[0];
+
+  const itemsHtml = items.map((it) => {
+    if (it.kind === "toll") {
+      const b = it.booth;
+      const opLabel = window.BR_Tolls?.OPERATOR_LABELS?.[b.operator] || b.operator || "Péage";
+      return `
+        <li class="step step--toll">
+          <div class="step-icon">€</div>
+          <div class="step-body">
+            <div class="step-title">Péage ${b.name ? "— " + escapeHtml(b.name) : ""}</div>
+            <div class="step-meta"><span>${escapeHtml(opLabel)}</span><span>au km ${it.atKm.toFixed(0)}</span></div>
+          </div>
+        </li>`;
+    }
+    const s = it.step;
+    const m = s.maneuver || {};
+    const isStart = m.type === "depart";
+    const isEnd = m.type === "arrive";
+    const cls = isStart ? "step--depart" : isEnd ? "step--arrive" : "";
+    const dist = (s.distance || 0) / 1000;
+    const dur = (s.duration || 0) / 60;
+    const name = s.name || "";
+    const ref = s.ref || "";
+    const dest = s.destinations || "";
+    const verb = maneuverLabel(s);
+    const titleParts = [escapeHtml(verb)];
+    if (ref) titleParts.push(shieldFor(ref));
+    else if (name) titleParts.push(escapeHtml(name));
+    const meta = [];
+    if (dest) meta.push(`vers ${escapeHtml(dest.split(",")[0])}`);
+    if (!isStart && !isEnd) {
+      if (dist >= 0.1) meta.push(`${dist >= 10 ? dist.toFixed(0) : dist.toFixed(1)} km`);
+      if (dur >= 1) meta.push(`${dur.toFixed(0)} min`);
+    }
+    return `
+      <li class="step ${cls}">
+        <div class="step-icon">${maneuverIcon(s)}</div>
+        <div class="step-body">
+          <div class="step-title">${titleParts.join(" ")}</div>
+          ${meta.length ? `<div class="step-meta">${meta.map((x) => `<span>${x}</span>`).join("")}</div>` : ""}
+        </div>
+      </li>`;
+  }).join("");
+
+  const html = `
+    <div class="roadbook-summary">
+      <div class="title">${escapeHtml(fromLabel)} → ${escapeHtml(toLabel)}</div>
+      <div class="meta">
+        <span><b>${fmtDuration(m.durationH)}</b></span>
+        <span><b>${fmtKm(m.distanceKm)}</b></span>
+        <span>Carburant <b>${fmtMoney(m.fuelCost)}</b></span>
+        <span>Péages <b>${fmtMoney(m.tollCost)}</b></span>
+        <span>Total <b>${fmtMoney(m.totalCost)}</b></span>
+      </div>
+    </div>
+    <ol class="roadbook-steps">${itemsHtml}</ol>
+  `;
+  document.getElementById("roadbook").innerHTML = html;
+}
+
+function openRoadbook(routeIndex) {
+  state.roadbookIndex = routeIndex;
+  selectRoute(routeIndex);
+  renderRoadbook(routeIndex);
+  showView("roadbook");
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 /* ---------------- Main flow ---------------- */
@@ -301,7 +575,9 @@ async function ensurePoint(kind) {
 async function runSearch() {
   const btn = document.getElementById("search");
   btn.disabled = true;
-  setStatus("Recherche d'itinéraires…");
+  setStatus("");
+  showView("loading");
+  setLoaderText("Recherche d'itinéraires…", "On compare les routes possibles");
 
   try {
     const vehicle = readVehicle();
@@ -312,7 +588,10 @@ async function runSearch() {
 
     let analyses = rawRoutes.map(() => null);
     if (vehicle.type === "car" && window.BR_Tolls) {
-      setStatus(`Détection des péages sur ${rawRoutes.length} itinéraire${rawRoutes.length > 1 ? "s" : ""}…`);
+      setLoaderText(
+        `Analyse des péages sur ${rawRoutes.length} itinéraire${rawRoutes.length > 1 ? "s" : ""}…`,
+        "Détection des concessionnaires"
+      );
       try {
         analyses = await window.BR_Tolls.analyzeRoutes(rawRoutes);
       } catch (e) {
@@ -320,6 +599,8 @@ async function runSearch() {
         setStatus("Péages indisponibles (Overpass injoignable). Distances et carburant calculés.", true);
       }
     }
+
+    setLoaderText("Calcul des coûts…", "Carburant, péages, durée");
 
     const routes = rawRoutes.map((r, i) => ({ ...r, metrics: computeMetrics(r, vehicle, analyses[i]) }));
     state.routes = routes;
@@ -331,14 +612,8 @@ async function runSearch() {
 
     const cheapIdx = tags.indexOf("cheap");
     selectRoute(cheapIdx >= 0 ? cheapIdx : 0);
-    updatePeekSummary();
 
-    // Sur mobile, on rabaisse le sheet pour laisser voir la carte une fois
-    // le trajet calculé. L'utilisateur peut tirer pour voir le détail.
-    if (isMobileLayout()) {
-      const sheet = document.getElementById("sheet");
-      if (sheet) setSnap(sheet, "mid");
-    }
+    showView("results");
 
     if (!document.getElementById("status").classList.contains("error")) {
       setStatus(`${routes.length} itinéraire${routes.length > 1 ? "s" : ""} comparé${routes.length > 1 ? "s" : ""}.`);
@@ -346,6 +621,7 @@ async function runSearch() {
   } catch (e) {
     console.error(e);
     setStatus(e.message || "Erreur inattendue", true);
+    showView("form");
   } finally {
     btn.disabled = false;
   }
@@ -479,17 +755,37 @@ function initBottomSheet() {
 function updatePeekSummary() {
   const title = document.getElementById("peek-title");
   const sub = document.getElementById("peek-sub");
+  const icon = document.getElementById("peek-icon");
   if (!title || !sub) return;
-  if (!state.routes.length) {
-    title.textContent = "Où va-t-on ?";
-    sub.textContent = "Compare le plus rapide, l'éco et le moins cher";
+
+  if (state.view === "loading") {
+    title.textContent = "Calcul en cours…";
+    sub.textContent = "Recherche des meilleurs itinéraires";
+    if (icon) icon.textContent = "⏱️";
     return;
   }
+
+  if (state.view === "form" || !state.routes.length) {
+    title.textContent = "Où va-t-on ?";
+    sub.textContent = "Compare le plus rapide, l'éco et le moins cher";
+    if (icon) icon.textContent = "🗺️";
+    return;
+  }
+
   const fromLabel = (state.points.from?.label || "Départ").split(",")[0];
   const toLabel = (state.points.to?.label || "Arrivée").split(",")[0];
-  const cheapest = state.routes.reduce((a, b) => a.metrics.totalCost <= b.metrics.totalCost ? a : b);
   title.textContent = `${fromLabel} → ${toLabel}`;
+
+  if (state.view === "roadbook" && state.roadbookIndex != null) {
+    const m = state.routes[state.roadbookIndex].metrics;
+    sub.textContent = `Feuille de route · ${fmtDuration(m.durationH)} · ${fmtMoney(m.totalCost)}`;
+    if (icon) icon.textContent = "🧭";
+    return;
+  }
+
+  const cheapest = state.routes.reduce((a, b) => a.metrics.totalCost <= b.metrics.totalCost ? a : b);
   sub.textContent = `${fmtDuration(cheapest.metrics.durationH)} · ${fmtKm(cheapest.metrics.distanceKm)} · ${fmtMoney(cheapest.metrics.totalCost)}`;
+  if (icon) icon.textContent = "🗺️";
 }
 
 /* ---------------- Boot ---------------- */
@@ -500,6 +796,16 @@ function boot() {
   attachAutocomplete("from", "from-suggestions", "from");
   attachAutocomplete("to", "to-suggestions", "to");
   document.getElementById("search").addEventListener("click", runSearch);
+
+  const backBtn = document.getElementById("peek-back");
+  if (backBtn) {
+    ["pointerdown", "click"].forEach((evt) =>
+      backBtn.addEventListener(evt, (e) => {
+        e.stopPropagation();
+        if (evt === "click") goBack();
+      })
+    );
+  }
 
   // Pré-remplit avec un exemple sympa
   document.getElementById("from").value = "Paris, France";

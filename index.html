@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f172a" />
   <title>BestRoad — Simulateur d'itinéraire</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="style.css?v=3" />
+  <link rel="stylesheet" href="style.css?v=4" />
 </head>
 <body>
   <main id="map"></main>
@@ -17,7 +17,8 @@
     </div>
 
     <header class="sheet__peek" id="sheet-peek">
-      <div class="peek-icon">🗺️</div>
+      <button class="peek-back" id="peek-back" aria-label="Retour" hidden>‹</button>
+      <div class="peek-icon" id="peek-icon">🗺️</div>
       <div class="peek-text">
         <div class="peek-title" id="peek-title">Où va-t-on ?</div>
         <div class="peek-sub" id="peek-sub">Compare le plus rapide, l'éco et le moins cher</div>
@@ -26,46 +27,70 @@
     </header>
 
     <div class="sheet__content">
-      <section class="form">
-        <label class="field">
-          <span>Départ</span>
-          <input id="from" type="text" placeholder="Ex. Paris, France" autocomplete="off" />
-          <ul class="suggestions" id="from-suggestions"></ul>
-        </label>
+      <!-- VIEW: form -->
+      <div class="view view-form" id="view-form">
+        <section class="form">
+          <label class="field">
+            <span>Départ</span>
+            <input id="from" type="text" placeholder="Ex. Paris, France" autocomplete="off" />
+            <ul class="suggestions" id="from-suggestions"></ul>
+          </label>
 
-        <label class="field">
-          <span>Arrivée</span>
-          <input id="to" type="text" placeholder="Ex. Lyon, France" autocomplete="off" />
-          <ul class="suggestions" id="to-suggestions"></ul>
-        </label>
+          <label class="field">
+            <span>Arrivée</span>
+            <input id="to" type="text" placeholder="Ex. Lyon, France" autocomplete="off" />
+            <ul class="suggestions" id="to-suggestions"></ul>
+          </label>
 
-        <details class="vehicle">
-          <summary>Paramètres du véhicule</summary>
-          <div class="vehicle-grid">
-            <label>
-              <span>Conso. (L/100 km)</span>
-              <input id="consumption" type="number" min="1" max="30" step="0.1" value="6.5" />
-            </label>
-            <label>
-              <span>Carburant (€/L)</span>
-              <input id="fuelPrice" type="number" min="0.1" max="5" step="0.01" value="1.85" />
-            </label>
-            <label>
-              <span>Type</span>
-              <select id="vehicleType">
-                <option value="car">Voiture</option>
-                <option value="bike">Vélo</option>
-                <option value="foot">À pied</option>
-              </select>
-            </label>
+          <details class="vehicle">
+            <summary>Paramètres du véhicule</summary>
+            <div class="vehicle-grid">
+              <label>
+                <span>Conso. (L/100 km)</span>
+                <input id="consumption" type="number" min="1" max="30" step="0.1" value="6.5" />
+              </label>
+              <label>
+                <span>Carburant (€/L)</span>
+                <input id="fuelPrice" type="number" min="0.1" max="5" step="0.01" value="1.85" />
+              </label>
+              <label>
+                <span>Type</span>
+                <select id="vehicleType">
+                  <option value="car">Voiture</option>
+                  <option value="bike">Vélo</option>
+                  <option value="foot">À pied</option>
+                </select>
+              </label>
+            </div>
+          </details>
+
+          <button id="search" class="cta">Calculer les itinéraires</button>
+          <p class="status" id="status"></p>
+        </section>
+      </div>
+
+      <!-- VIEW: loading -->
+      <div class="view view-loading" id="view-loading" hidden>
+        <div class="loader">
+          <div class="loader-track">
+            <div class="loader-track-bg"></div>
+            <div class="loader-track-dashes"></div>
+            <div class="loader-car">🚗</div>
           </div>
-        </details>
+          <div class="loader-text" id="loader-text">Recherche d'itinéraires…</div>
+          <div class="loader-sub" id="loader-sub">On compare les routes possibles</div>
+        </div>
+      </div>
 
-        <button id="search" class="cta">Calculer les itinéraires</button>
-        <p class="status" id="status"></p>
-      </section>
+      <!-- VIEW: results -->
+      <div class="view view-results" id="view-results" hidden>
+        <section class="results" id="results"></section>
+      </div>
 
-      <section class="results" id="results"></section>
+      <!-- VIEW: roadbook -->
+      <div class="view view-roadbook" id="view-roadbook" hidden>
+        <div class="roadbook" id="roadbook"></div>
+      </div>
 
       <footer class="legal">
         Données &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> ·
@@ -76,7 +101,7 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js"></script>
-  <script src="tolls.js?v=3"></script>
-  <script src="app.js?v=3"></script>
+  <script src="tolls.js?v=4"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

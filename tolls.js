@@ -153,22 +153,49 @@ async function postOverpass(query) {
   throw lastErr || new Error("Overpass injoignable");
 }
 
-async function fetchTollWaysNearCoords(coords, { around = 400, maxSamples = 90 } = {}) {
+async function fetchTollDataNearCoords(coords, { around = 400, maxSamples = 90 } = {}) {
   const samples = downsample(coords, maxSamples);
   const around_str = samples
     .map(([lon, lat]) => `${lat.toFixed(5)},${lon.toFixed(5)}`)
     .join(",");
-  const query = `[out:json][timeout:40];way[highway=motorway][toll=yes](around:${around},${around_str});out geom tags;`;
+  const query = `
+[out:json][timeout:40];
+(
+  way[highway=motorway][toll=yes](around:${around},${around_str});
+  node[barrier=toll_booth](around:${around},${around_str});
+);
+out geom tags;
+`;
   const json = await postOverpass(query);
-  return (json.elements || [])
-    .filter((w) => w.type === "way" && Array.isArray(w.geometry) && w.geometry.length >= 2)
-    .map((w) => ({
-      id: w.id,
-      operator: detectOperator(w.tags),
-      operatorRaw: w.tags?.operator || w.tags?.["operator:short"] || w.tags?.network || null,
-      ref: w.tags?.ref || null,
-      geometry: w.geometry.map((p) => [p.lon, p.lat]),
-    }));
+  const ways = [];
+  const booths = [];
+  for (const el of json.elements || []) {
+    if (el.type === "way" && Array.isArray(el.geometry) && el.geometry.length >= 2) {
+      ways.push({
+        id: el.id,
+        operator: detectOperator(el.tags),
+        operatorRaw: el.tags?.operator || el.tags?.["operator:short"] || el.tags?.network || null,
+        ref: el.tags?.ref || null,
+        geometry: el.geometry.map((p) => [p.lon, p.lat]),
+      });
+    } else if (el.type === "node") {
+      booths.push({
+        id: el.id,
+        lat: el.lat,
+        lon: el.lon,
+        name: el.tags?.name || null,
+        ref: el.tags?.ref || null,
+        operator: detectOperator(el.tags),
+      });
+    }
+  }
+  return { ways, booths };
+}
+
+// Backwards-compatible helper kept for clarity
+async function fetchTollWaysNearCoords(coords, opts) {
+  const { ways } = await fetchTollDataNearCoords(coords, opts);
+  return ways;
 }
 
 /* ---------------- Spatial analysis ---------------- */
@@ -252,22 +279,49 @@ function analyzeRouteAgainstWays(route, tollWays, { sampleM = 250, toleranceM = 
   return { tolledKm, byOperator, breakdown, totalCost };
 }
 
+function filterBoothsOnRoute(route, booths, toleranceM = 80) {
+  if (!booths.length) return [];
+  const lineRoute = turf.lineString(route.geometry.coordinates);
+  const totalKm = turf.length(lineRoute, { units: "kilometers" });
+  return booths
+    .map((b) => {
+      const pt = turf.point([b.lon, b.lat]);
+      const d = turf.pointToLineDistance(pt, lineRoute, { units: "meters" });
+      if (d > toleranceM) return null;
+      // distance traversée (en km) au point le plus proche sur la route
+      let alongKm = 0;
+      try {
+        const sliced = turf.lineSlice(turf.point(route.geometry.coordinates[0]), pt, lineRoute);
+        alongKm = turf.length(sliced, { units: "kilometers" });
+      } catch (_) { alongKm = 0; }
+      if (alongKm > totalKm) alongKm = totalKm;
+      return { ...b, distanceFromStartKm: alongKm };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.distanceFromStartKm - b.distanceFromStartKm);
+}
+
 /**
  * Lance une seule requête Overpass couvrant l'union des itinéraires,
- * puis analyse chaque route séparément. Retourne un tableau d'analyses
- * dans le même ordre que `routes`.
+ * puis analyse chaque route séparément.
  */
 async function analyzeRoutes(routes) {
   if (!routes.length) return [];
   const allCoords = routes.flatMap((r) => r.geometry.coordinates);
-  const tollWays = await fetchTollWaysNearCoords(allCoords);
-  return routes.map((r) => analyzeRouteAgainstWays(r, tollWays));
+  const { ways, booths } = await fetchTollDataNearCoords(allCoords);
+  return routes.map((r) => {
+    const analysis = analyzeRouteAgainstWays(r, ways);
+    const routeBooths = filterBoothsOnRoute(r, booths);
+    return { ...analysis, booths: routeBooths };
+  });
 }
 
 window.BR_Tolls = {
   analyzeRoutes,
   analyzeRouteAgainstWays,
   fetchTollWaysNearCoords,
+  fetchTollDataNearCoords,
+  filterBoothsOnRoute,
   OPERATOR_RATES,
   OPERATOR_LABELS,
   DEFAULT_RATE,
