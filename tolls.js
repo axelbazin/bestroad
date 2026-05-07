@@ -17,25 +17,30 @@ const OVERPASS_ENDPOINTS = [
   "https://overpass.kumi.systems/api/interpreter",
 ];
 
+// Tarifs €/km pour la classe 1 (voiture), basés sur les barèmes
+// utilisateur 2024 publiés par chaque concessionnaire. Ce sont des
+// prix de bout-en-bout : on les applique aux km péagés détectés sur
+// le tracé. Pour de l'exact gare-à-gare il faudrait la matrice ASFA.
 const OPERATOR_RATES = {
-  ASF:       0.094,
-  COFIROUTE: 0.090,
-  ESCOTA:    0.102,
-  APRR:      0.096,
-  AREA:      0.105,
-  SANEF:     0.093,
+  ASF:       0.102,
+  COFIROUTE: 0.097,
+  ESCOTA:    0.107,
+  APRR:      0.099,
+  AREA:      0.107,
+  SANEF:     0.096,
   SAPN:      0.108,
-  ATMB:      0.125,
-  ADELAC:    0.110,
+  ATMB:      0.165,
+  ADELAC:    0.150,
   ALBEA:     0.090,
-  ALIAE:     0.095,
-  ALIENOR:   0.099,
-  ATLANDES:  0.088,
+  ALIAE:     0.104,
+  ALIENOR:   0.135,
+  ALIS:      0.135,
+  ATLANDES:  0.155,
   CEVM:      0.500,
   SFTRF:     1.000,
 };
 
-const DEFAULT_RATE = 0.095;
+const DEFAULT_RATE = 0.110;
 
 const OPERATOR_LABELS = {
   ASF:       "Vinci ASF",
@@ -50,10 +55,30 @@ const OPERATOR_LABELS = {
   ALBEA:     "ALBEA",
   ALIAE:     "ALIAE",
   ALIENOR:   "A'liénor",
-  ATLANDES:  "Atlandes",
+  ALIS:      "ALIS (A28)",
+  ATLANDES:  "Atlandes (A63)",
   CEVM:      "Viaduc de Millau",
   SFTRF:     "Tunnel du Fréjus",
   OTHER:     "Autre concessionnaire",
+};
+
+// Fallback ref → opérateur quand le tag `operator` OSM est manquant ou
+// non normalisable. Approximatif : certaines autoroutes ont plusieurs
+// concessionnaires sur leur longueur (A10, A28, A40…). On choisit le
+// concessionnaire majoritaire ou le plus probable pour un usage courant.
+const REF_TO_OPERATOR = {
+  A1: "SANEF", A2: "SANEF", A4: "SANEF", A16: "SANEF", A26: "SANEF", A29: "SANEF",
+  A13: "SAPN", A14: "SAPN", A131: "SAPN", A150: "SAPN", A151: "SAPN", A154: "SAPN",
+  A28: "ALIS",
+  A19: "ALIAE",
+  A5: "APRR", A6: "APRR", A31: "APRR", A36: "APRR", A39: "APRR", A40: "APRR", A406: "APRR", A77: "APRR",
+  A41: "AREA", A43: "AREA", A48: "AREA", A49: "AREA", A51: "AREA",
+  A11: "COFIROUTE", A71: "COFIROUTE", A81: "COFIROUTE", A85: "COFIROUTE", A86: "COFIROUTE",
+  A7: "ASF", A9: "ASF", A10: "ASF", A20: "ASF", A52: "ASF", A54: "ASF", A57: "ASF",
+  A61: "ASF", A62: "ASF", A64: "ASF", A66: "ASF", A75: "ASF", A87: "ASF", A89: "ASF",
+  A8: "ESCOTA",
+  A63: "ATLANDES",
+  A65: "ALIENOR",
 };
 
 function normalizeOperator(raw) {
@@ -68,6 +93,7 @@ function normalizeOperator(raw) {
   if (s.includes("ADELAC")) return "ADELAC";
   if (s.includes("ALBEA")) return "ALBEA";
   if (s.includes("ALIAE")) return "ALIAE";
+  if (s.includes("ALIS")) return "ALIS";
   if (s.includes("ATMB")) return "ATMB";
   if (s.includes("AREA")) return "AREA";
   if (s.includes("APRR")) return "APRR";
@@ -75,6 +101,26 @@ function normalizeOperator(raw) {
   if (s.includes("SANEF")) return "SANEF";
   if (s.includes("ASF")) return "ASF";
   return null;
+}
+
+function refToOperator(refRaw) {
+  if (!refRaw) return null;
+  const candidates = String(refRaw).split(/[;,/]/).map((r) =>
+    r.trim().replace(/\s+/g, "").toUpperCase()
+  );
+  for (const r of candidates) {
+    if (REF_TO_OPERATOR[r]) return REF_TO_OPERATOR[r];
+  }
+  return null;
+}
+
+function detectOperator(tags) {
+  if (!tags) return null;
+  const direct = normalizeOperator(
+    tags.operator || tags["operator:short"] || tags.network || tags.owner
+  );
+  if (direct) return direct;
+  return refToOperator(tags.ref);
 }
 
 /* ---------------- Overpass query ---------------- */
@@ -118,9 +164,7 @@ async function fetchTollWaysNearCoords(coords, { around = 400, maxSamples = 90 }
     .filter((w) => w.type === "way" && Array.isArray(w.geometry) && w.geometry.length >= 2)
     .map((w) => ({
       id: w.id,
-      operator: normalizeOperator(
-        w.tags?.operator || w.tags?.["operator:short"] || w.tags?.network
-      ),
+      operator: detectOperator(w.tags),
       operatorRaw: w.tags?.operator || w.tags?.["operator:short"] || w.tags?.network || null,
       ref: w.tags?.ref || null,
       geometry: w.geometry.map((p) => [p.lon, p.lat]),

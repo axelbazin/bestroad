@@ -37,17 +37,23 @@ Le coût des péages **n'est pas une heuristique**. Pour chaque itinéraire :
    issu des moyennes 2024 publiées par l'ASFA et les concessionnaires
    (classe 1 — voiture).
 
-Tarifs embarqués (€/km, dans `tolls.js`) :
+Tarifs embarqués (€/km, classe 1, basés sur les barèmes utilisateur 2024
+publiés par chaque concessionnaire) :
 
 | Réseau | €/km | Réseau | €/km |
 |---|---|---|---|
-| Vinci ASF | 0,094 | Sanef | 0,093 |
-| Vinci Cofiroute | 0,090 | SAPN | 0,108 |
-| Vinci Escota | 0,102 | ATMB | 0,125 |
-| APRR | 0,096 | ADELAC | 0,110 |
-| AREA | 0,105 | A'liénor | 0,099 |
-| Atlandes | 0,088 | ALIAE | 0,095 |
+| Vinci ASF | 0,102 | Sanef | 0,096 |
+| Vinci Cofiroute | 0,097 | SAPN | 0,108 |
+| Vinci Escota | 0,107 | ATMB | 0,165 |
+| APRR | 0,099 | ADELAC | 0,150 |
+| AREA | 0,107 | A'liénor (A65) | 0,135 |
+| Atlandes (A63) | 0,155 | ALIS (A28) | 0,135 |
+| ALIAE | 0,104 | ALBEA | 0,090 |
 | Viaduc de Millau | 0,500 | Tunnel du Fréjus | 1,000 |
+
+Quand le tag OSM `operator` est manquant ou non normalisable, on fait un
+fallback sur le `ref` autoroute (table `REF_TO_OPERATOR` dans `tolls.js`)
+pour récupérer le concessionnaire majoritaire de chaque axe.
 
 Pour une précision **gare-à-gare** (au lieu d'un €/km moyen par réseau), il
 faudrait intégrer les matrices tarifaires complètes publiées sur
