@@ -158,18 +158,15 @@ async function fetchTollDataNearCoords(coords, { around = 400, maxSamples = 90 }
   const around_str = samples
     .map(([lon, lat]) => `${lat.toFixed(5)},${lon.toFixed(5)}`)
     .join(",");
-  const query = `
-[out:json][timeout:40];
-(
-  way[highway=motorway][toll=yes](around:${around},${around_str});
-  node[barrier=toll_booth](around:${around},${around_str});
-);
-out geom tags;
-`;
+  const query = `[out:json][timeout:40];(way[highway=motorway][toll=yes](around:${around},${around_str});node[barrier=toll_booth](around:${around},${around_str}););out geom;`;
   const json = await postOverpass(query);
+  if (!json || !Array.isArray(json.elements)) {
+    console.warn("[tolls] Overpass: réponse inattendue", json);
+    return { ways: [], booths: [] };
+  }
   const ways = [];
   const booths = [];
-  for (const el of json.elements || []) {
+  for (const el of json.elements) {
     if (el.type === "way" && Array.isArray(el.geometry) && el.geometry.length >= 2) {
       ways.push({
         id: el.id,
@@ -178,7 +175,7 @@ out geom tags;
         ref: el.tags?.ref || null,
         geometry: el.geometry.map((p) => [p.lon, p.lat]),
       });
-    } else if (el.type === "node") {
+    } else if (el.type === "node" && typeof el.lat === "number" && typeof el.lon === "number") {
       booths.push({
         id: el.id,
         lat: el.lat,
@@ -189,6 +186,7 @@ out geom tags;
       });
     }
   }
+  console.info(`[tolls] Overpass: ${ways.length} voies péagées, ${booths.length} gares détectées`);
   return { ways, booths };
 }
 
