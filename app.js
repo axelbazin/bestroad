@@ -589,7 +589,9 @@ async function fetchRoutes(from, to, profile) {
   // permettent d'obtenir des chemins réellement différents.
   const distKm = approxDistKm(from, to);
   if (profile === "driving" && distKm > 150) {
-    for (const offsetKm of [80, -80, 140, -140]) {
+    // ±80 km uniquement : assez pour pousser une alternative crédible
+    // sans forcer un détour farfelu par l'autre bout du pays.
+    for (const offsetKm of [80, -80]) {
       const via = midpointWithLateralOffset(from, to, offsetKm);
       const c = `${from.lon},${from.lat};${via.lon},${via.lat};${to.lon},${to.lat}`;
       queries.push(osrmGet(c, profile, false).then((rs) => rs.map(mergeLegsIntoSingleRoute)));
@@ -1033,8 +1035,10 @@ async function runSearch() {
     let tags = rankRoutes(routes);
     drawRoutes(routes, tags);
     renderResults(routes, tags, { tollsLoading: tollsWillLoad });
-    const cheapIdx = tags.indexOf("cheap");
-    selectRoute(cheapIdx >= 0 ? cheapIdx : 0);
+    // Sélection par défaut : le plus rapide (le plus attendu façon Michelin),
+    // l'utilisateur peut basculer sur le plus économique via les cards.
+    const fastIdx = tags.indexOf("fast");
+    selectRoute(fastIdx >= 0 ? fastIdx : 0);
     showView("results");
 
     if (!tollsWillLoad) {
@@ -1054,7 +1058,7 @@ async function runSearch() {
 
       drawRoutes(routes, tags);
       renderResults(routes, tags, { tollsLoading: false });
-      const idx = state.activeIndex != null ? state.activeIndex : (tags.indexOf("cheap") >= 0 ? tags.indexOf("cheap") : 0);
+      const idx = state.activeIndex != null ? state.activeIndex : (tags.indexOf("fast") >= 0 ? tags.indexOf("fast") : 0);
       selectRoute(idx);
       updatePeekSummary();
       setStatus(`${routes.length} itinéraire${routes.length > 1 ? "s" : ""} comparé${routes.length > 1 ? "s" : ""} (péages inclus).`);
