@@ -496,14 +496,93 @@ function attachAutocomplete(inputId, suggestionsId, kind) {
 
 /* ---------------- Routing ---------------- */
 
-async function fetchRoutes(from, to, profile) {
-  const coords = `${from.lon},${from.lat};${to.lon},${to.lat}`;
-  const url = `${OSRM_BASE}/route/v1/${profile}/${coords}?alternatives=3&overview=full&geometries=geojson&steps=true&annotations=true`;
+function midpointWithLateralOffset(from, to, offsetKm) {
+  const midLat = (from.lat + to.lat) / 2;
+  const midLon = (from.lon + to.lon) / 2;
+  const dLon = to.lon - from.lon;
+  const dLat = to.lat - from.lat;
+  const len = Math.hypot(dLon, dLat);
+  if (len === 0) return { lat: midLat, lon: midLon };
+  // Vecteur perpendiculaire (-dLat, dLon) normalisé
+  const px = -dLat / len;
+  const py = dLon / len;
+  const cosLat = Math.cos((midLat * Math.PI) / 180);
+  return {
+    lat: midLat + (offsetKm / 111) * py,
+    lon: midLon + (offsetKm / (111 * cosLat)) * px,
+  };
+}
+
+function approxDistKm(a, b) {
+  const dLat = (b.lat - a.lat) * 111;
+  const dLon = (b.lon - a.lon) * 111 * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+  return Math.hypot(dLat, dLon);
+}
+
+async function osrmGet(coordsStr, profile, withAlternatives) {
+  const params = [
+    "overview=full",
+    "geometries=geojson",
+    "steps=true",
+    "annotations=true",
+  ];
+  if (withAlternatives) params.unshift("alternatives=3");
+  const url = `${OSRM_BASE}/route/v1/${profile}/${coordsStr}?${params.join("&")}`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error("Échec du routage");
+  if (!res.ok) throw new Error(`OSRM HTTP ${res.status}`);
   const json = await res.json();
-  if (json.code !== "Ok" || !json.routes?.length) throw new Error(json.message || "Aucun itinéraire trouvé");
+  if (json.code !== "Ok" || !Array.isArray(json.routes)) {
+    throw new Error(json.message || "OSRM: pas de route");
+  }
   return json.routes;
+}
+
+function mergeLegsIntoSingleRoute(route) {
+  // OSRM avec via-point retourne plusieurs legs. On garde la structure
+  // telle quelle — la durée/distance totales restent au niveau route.
+  return route;
+}
+
+function dedupeRoutes(routes) {
+  const out = [];
+  for (const r of routes) {
+    const dup = out.find((u) => {
+      const dDist = Math.abs(u.distance - r.distance) / Math.max(u.distance, r.distance);
+      const dDur = Math.abs(u.duration - r.duration) / Math.max(u.duration, r.duration);
+      return dDist < 0.025 && dDur < 0.04;
+    });
+    if (!dup) out.push(r);
+  }
+  return out;
+}
+
+async function fetchRoutes(from, to, profile) {
+  const direct = `${from.lon},${from.lat};${to.lon},${to.lat}`;
+  const queries = [osrmGet(direct, profile, true)];
+
+  // Pour les longs trajets en voiture, on force des alternatives via des
+  // points de passage latéraux à ±80 km de la ligne directe. OSRM ne
+  // trouve souvent qu'une seule route sur autoroute, ces via-points
+  // permettent d'obtenir des chemins réellement différents.
+  const distKm = approxDistKm(from, to);
+  if (profile === "driving" && distKm > 150) {
+    for (const offsetKm of [80, -80, 140, -140]) {
+      const via = midpointWithLateralOffset(from, to, offsetKm);
+      const c = `${from.lon},${from.lat};${via.lon},${via.lat};${to.lon},${to.lat}`;
+      queries.push(osrmGet(c, profile, false).then((rs) => rs.map(mergeLegsIntoSingleRoute)));
+    }
+  }
+
+  const settled = await Promise.allSettled(queries);
+  const all = [];
+  for (const r of settled) {
+    if (r.status === "fulfilled") all.push(...r.value);
+    else console.warn("[osrm]", r.reason?.message || r.reason);
+  }
+  if (!all.length) throw new Error("Aucun itinéraire trouvé");
+
+  const unique = dedupeRoutes(all).sort((a, b) => a.duration - b.duration);
+  return unique.slice(0, 4);
 }
 
 /* ---------------- Cost model ---------------- */

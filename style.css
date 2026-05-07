@@ -523,7 +523,7 @@ body {
 .step--toll .step-body .step-title { color: var(--text); }
 .step--toll .step-meta { color: var(--cheap); }
 
-/* ---------------- Toll booth pin (MapLibre marker) ---------------- */
+/* ---------------- Toll booth pin (Mapbox marker) ---------------- */
 
 .toll-pin-wrap {
   position: relative;
@@ -535,8 +535,7 @@ body {
 .toll-pin {
   position: absolute;
   top: 0;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
   width: 28px;
   height: 28px;
   border-radius: 999px;
@@ -556,12 +555,13 @@ body {
   position: absolute;
   bottom: 0;
   left: 50%;
-  width: 9px;
-  height: 9px;
-  background: var(--cheap);
-  transform: translateX(-50%) rotate(45deg);
-  border-right: 2px solid #0b1226;
-  border-bottom: 2px solid #0b1226;
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 8px solid var(--cheap);
+  transform: translateX(-50%);
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4));
 }
 
 /* ---------------- Form ---------------- */
