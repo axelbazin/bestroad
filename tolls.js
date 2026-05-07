@@ -153,39 +153,58 @@ async function postOverpass(query) {
   throw lastErr || new Error("Overpass injoignable");
 }
 
-async function fetchTollDataNearCoords(coords, { around = 400, maxSamples = 90 } = {}) {
+async function fetchTollDataNearCoords(coords, { around = 400, maxSamples = 140 } = {}) {
   const samples = downsample(coords, maxSamples);
   const around_str = samples
     .map(([lon, lat]) => `${lat.toFixed(5)},${lon.toFixed(5)}`)
     .join(",");
-  const query = `[out:json][timeout:40];(way[highway=motorway][toll=yes](around:${around},${around_str});node[barrier=toll_booth](around:${around},${around_str}););out geom;`;
-  const json = await postOverpass(query);
-  if (!json || !Array.isArray(json.elements)) {
-    console.warn("[tolls] Overpass: réponse inattendue", json);
-    return { ways: [], booths: [] };
-  }
+
+  // Deux requêtes indépendantes — l'union dans un seul `out geom` était
+  // capricieuse côté Overpass et faisait régresser la détection des voies.
+  const wayQuery = `[out:json][timeout:40];way[highway=motorway][toll=yes](around:${around},${around_str});out geom;`;
+  const nodeQuery = `[out:json][timeout:40];node[barrier=toll_booth](around:${around},${around_str});out;`;
+
+  const [wayRes, nodeRes] = await Promise.allSettled([
+    postOverpass(wayQuery),
+    postOverpass(nodeQuery),
+  ]);
+
   const ways = [];
   const booths = [];
-  for (const el of json.elements) {
-    if (el.type === "way" && Array.isArray(el.geometry) && el.geometry.length >= 2) {
-      ways.push({
-        id: el.id,
-        operator: detectOperator(el.tags),
-        operatorRaw: el.tags?.operator || el.tags?.["operator:short"] || el.tags?.network || null,
-        ref: el.tags?.ref || null,
-        geometry: el.geometry.map((p) => [p.lon, p.lat]),
-      });
-    } else if (el.type === "node" && typeof el.lat === "number" && typeof el.lon === "number") {
-      booths.push({
-        id: el.id,
-        lat: el.lat,
-        lon: el.lon,
-        name: el.tags?.name || null,
-        ref: el.tags?.ref || null,
-        operator: detectOperator(el.tags),
-      });
+
+  if (wayRes.status === "fulfilled" && Array.isArray(wayRes.value?.elements)) {
+    for (const el of wayRes.value.elements) {
+      if (el.type === "way" && Array.isArray(el.geometry) && el.geometry.length >= 2) {
+        ways.push({
+          id: el.id,
+          operator: detectOperator(el.tags),
+          operatorRaw: el.tags?.operator || el.tags?.["operator:short"] || el.tags?.network || null,
+          ref: el.tags?.ref || null,
+          geometry: el.geometry.map((p) => [p.lon, p.lat]),
+        });
+      }
     }
+  } else if (wayRes.status === "rejected") {
+    console.warn("[tolls] way query failed:", wayRes.reason);
   }
+
+  if (nodeRes.status === "fulfilled" && Array.isArray(nodeRes.value?.elements)) {
+    for (const el of nodeRes.value.elements) {
+      if (el.type === "node" && typeof el.lat === "number" && typeof el.lon === "number") {
+        booths.push({
+          id: el.id,
+          lat: el.lat,
+          lon: el.lon,
+          name: el.tags?.name || null,
+          ref: el.tags?.ref || null,
+          operator: detectOperator(el.tags),
+        });
+      }
+    }
+  } else if (nodeRes.status === "rejected") {
+    console.warn("[tolls] node query failed:", nodeRes.reason);
+  }
+
   console.info(`[tolls] Overpass: ${ways.length} voies péagées, ${booths.length} gares détectées`);
   return { ways, booths };
 }
