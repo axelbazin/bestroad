@@ -532,6 +532,13 @@ body {
   pointer-events: auto;
 }
 
+.toll-pin-inner {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 100%;
+  transition: transform 0.2s ease;
+}
+
 .toll-pin {
   position: absolute;
   top: 0;
@@ -550,7 +557,7 @@ body {
   cursor: pointer;
 }
 
-.toll-pin-wrap::after {
+.toll-pin-inner::after {
   content: "";
   position: absolute;
   bottom: 0;

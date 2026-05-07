@@ -100,6 +100,8 @@ function initMap() {
     }
   });
 
+  state.map.on("zoom", () => updateTollPinsZoom());
+
   state.map.on("error", (e) => {
     console.warn("[map]", e.error || e);
   });
@@ -306,7 +308,7 @@ function renderTollPins(routeIndex) {
   for (const b of booths) {
     const el = document.createElement("div");
     el.className = "toll-pin-wrap";
-    el.innerHTML = `<div class="toll-pin">€</div>`;
+    el.innerHTML = `<div class="toll-pin-inner"><div class="toll-pin">€</div></div>`;
     const marker = new mapboxgl.Marker({ element: el, anchor: "bottom" })
       .setLngLat([b.lon, b.lat]);
     if (b.name || b.operator) {
@@ -319,6 +321,27 @@ function renderTollPins(routeIndex) {
     }
     marker.addTo(state.map);
     state.boothMarkers.push(marker);
+  }
+  updateTollPinsZoom();
+}
+
+function updateTollPinsZoom() {
+  if (!state.map || !state.boothMarkers.length) return;
+  const z = state.map.getZoom();
+  let visible = true;
+  let scale = 1;
+  if (z < 7) {
+    visible = false;
+  } else if (z < 9) {
+    scale = 0.5;
+  } else if (z < 11) {
+    scale = 0.75;
+  }
+  for (const m of state.boothMarkers) {
+    const el = m.getElement();
+    el.style.display = visible ? "" : "none";
+    const inner = el.querySelector(".toll-pin-inner");
+    if (inner) inner.style.transform = `scale(${scale})`;
   }
 }
 
