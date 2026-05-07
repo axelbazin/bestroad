@@ -210,7 +210,7 @@ function drawRoutes(routes, tags) {
   if (allPoints.length) state.map.fitBounds(L.latLngBounds(allPoints).pad(0.15));
 }
 
-function renderResults(routes, tags) {
+function renderResults(routes, tags, { tollsLoading = false, tollsFailed = false } = {}) {
   const container = document.getElementById("results");
   container.innerHTML = "";
 
@@ -233,6 +233,15 @@ function renderResults(routes, tags) {
           .join("")}</div>`
       : "";
 
+    const tollValue = tollsLoading
+      ? `<span class="loading-pill">Calcul…</span>`
+      : tollsFailed
+      ? `<span class="muted">indispo.</span>`
+      : `${fmtMoney(m.tollCost)} · ${m.tolledKm.toFixed(0)} km`;
+    const totalValue = tollsLoading
+      ? `<span class="loading-pill">${fmtMoney(m.fuelCost)} +…</span>`
+      : fmtMoney(m.totalCost);
+
     const card = document.createElement("div");
     card.className = `route-card ${tag}`;
     card.dataset.index = i;
@@ -245,8 +254,8 @@ function renderResults(routes, tags) {
         <div class="stat"><span class="label">Durée</span><span class="value">${fmtDuration(m.durationH)}</span></div>
         <div class="stat"><span class="label">Distance</span><span class="value">${fmtKm(m.distanceKm)}</span></div>
         <div class="stat"><span class="label">Carburant</span><span class="value">${fmtLiters(m.fuelL)} · ${fmtMoney(m.fuelCost)}</span></div>
-        <div class="stat"><span class="label">Péages</span><span class="value">${fmtMoney(m.tollCost)} · ${m.tolledKm.toFixed(0)} km</span></div>
-        <div class="stat"><span class="label">Coût total</span><span class="value">${fmtMoney(m.totalCost)}</span></div>
+        <div class="stat"><span class="label">Péages</span><span class="value">${tollValue}</span></div>
+        <div class="stat"><span class="label">Coût total</span><span class="value">${totalValue}</span></div>
         <div class="stat"><span class="label">Vitesse moy.</span><span class="value">${m.avgKmh.toFixed(0)} km/h</span></div>
       </div>
       ${breakdownHtml}
@@ -586,37 +595,45 @@ async function runSearch() {
 
     const rawRoutes = await fetchRoutes(from, to, profile);
 
-    let analyses = rawRoutes.map(() => null);
-    if (vehicle.type === "car" && window.BR_Tolls) {
-      setLoaderText(
-        `Analyse des péages sur ${rawRoutes.length} itinéraire${rawRoutes.length > 1 ? "s" : ""}…`,
-        "Détection des concessionnaires"
-      );
-      try {
-        analyses = await window.BR_Tolls.analyzeRoutes(rawRoutes);
-      } catch (e) {
-        console.warn("Analyse des péages indisponible :", e);
-        setStatus("Péages indisponibles (Overpass injoignable). Distances et carburant calculés.", true);
-      }
-    }
-
-    setLoaderText("Calcul des coûts…", "Carburant, péages, durée");
-
-    const routes = rawRoutes.map((r, i) => ({ ...r, metrics: computeMetrics(r, vehicle, analyses[i]) }));
+    // 1ère passe : on rend tout de suite avec carburant + distance, sans péages.
+    const initialAnalyses = rawRoutes.map(() => null);
+    let routes = rawRoutes.map((r) => ({ ...r, metrics: computeMetrics(r, vehicle, null) }));
     state.routes = routes;
-    state.analyses = analyses;
-    const tags = rankRoutes(routes);
+    state.analyses = initialAnalyses;
 
+    const tollsWillLoad = vehicle.type === "car" && !!window.BR_Tolls;
+    let tags = rankRoutes(routes);
     drawRoutes(routes, tags);
-    renderResults(routes, tags);
-
+    renderResults(routes, tags, { tollsLoading: tollsWillLoad });
     const cheapIdx = tags.indexOf("cheap");
     selectRoute(cheapIdx >= 0 ? cheapIdx : 0);
-
     showView("results");
 
-    if (!document.getElementById("status").classList.contains("error")) {
+    if (!tollsWillLoad) {
       setStatus(`${routes.length} itinéraire${routes.length > 1 ? "s" : ""} comparé${routes.length > 1 ? "s" : ""}.`);
+      return;
+    }
+
+    setStatus("Analyse des péages en cours…");
+
+    // 2e passe : on enrichit avec les péages quand Overpass + l'analyse sont prêts.
+    try {
+      const analyses = await window.BR_Tolls.analyzeRoutes(rawRoutes);
+      routes = rawRoutes.map((r, i) => ({ ...r, metrics: computeMetrics(r, vehicle, analyses[i]) }));
+      state.routes = routes;
+      state.analyses = analyses;
+      tags = rankRoutes(routes);
+
+      drawRoutes(routes, tags);
+      renderResults(routes, tags, { tollsLoading: false });
+      const idx = state.activeIndex != null ? state.activeIndex : (tags.indexOf("cheap") >= 0 ? tags.indexOf("cheap") : 0);
+      selectRoute(idx);
+      updatePeekSummary();
+      setStatus(`${routes.length} itinéraire${routes.length > 1 ? "s" : ""} comparé${routes.length > 1 ? "s" : ""} (péages inclus).`);
+    } catch (e) {
+      console.warn("Analyse des péages indisponible :", e);
+      renderResults(routes, tags, { tollsLoading: false, tollsFailed: true });
+      setStatus("Péages indisponibles (Overpass injoignable).", true);
     }
   } catch (e) {
     console.error(e);

@@ -647,6 +647,24 @@ body {
   font-weight: 600;
 }
 
+.loading-pill {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #1a2750;
+  color: var(--muted);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.muted { color: var(--muted); font-weight: 500; font-size: 13px; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
 .breakdown {
   margin-top: 10px;
   display: flex;

@@ -236,35 +236,56 @@ function pointBboxAround(lon, lat, padDeg) {
   return [lon - padDeg, lat - padDeg, lon + padDeg, lat + padDeg];
 }
 
-function analyzeRouteAgainstWays(route, tollWays, { sampleM = 250, toleranceM = 30 } = {}) {
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const dφ = ((lat2 - lat1) * Math.PI) / 180;
+  const dλ = ((lon2 - lon1) * Math.PI) / 180;
+  const a = Math.sin(dφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
+ * Marche segment-par-segment sur la polyligne OSRM (O(N+M)) au lieu
+ * d'échantillonner via turf.along (O(N×M)). Pour chaque pair de points
+ * consécutifs, on regarde si le milieu est à <toleranceM d'une voie
+ * péagée et on pondère par la longueur du segment.
+ */
+function analyzeRouteAgainstWays(route, tollWays, { toleranceM = 30, stride = 1 } = {}) {
   const coords = route.geometry.coordinates;
   if (coords.length < 2 || tollWays.length === 0) {
-    return { tolledKm: 0, byOperator: {}, totalCost: 0 };
+    return { tolledKm: 0, byOperator: {}, breakdown: {}, totalCost: 0 };
   }
 
-  const lineRoute = turf.lineString(coords);
-  const totalKm = turf.length(lineRoute, { units: "kilometers" });
-  if (totalKm === 0) return { tolledKm: 0, byOperator: {}, totalCost: 0 };
-
   const ways = tollWays
+    .filter((w) => Array.isArray(w.geometry) && w.geometry.length >= 2)
     .map((w) => ({
       operator: w.operator,
       line: turf.lineString(w.geometry),
       bbox: bboxOfCoords(w.geometry, 0.005),
     }));
 
-  const numSamples = Math.max(2, Math.ceil((totalKm * 1000) / sampleM));
-  const stepKm = totalKm / numSamples;
   const padDeg = toleranceM / 111000 + 0.001;
-
   const byOperator = {};
   let tolledKm = 0;
 
-  for (let i = 0; i < numSamples; i++) {
-    const along = stepKm * (i + 0.5);
-    const pt = turf.along(lineRoute, along, { units: "kilometers" });
-    const [plon, plat] = pt.geometry.coordinates;
-    const ptBbox = pointBboxAround(plon, plat, padDeg);
+  // Pour les longues routes, on saute des points (stride 2) pour tenir
+  // la latence sous la seconde. La perte de précision est négligeable
+  // (sampling à ~200 m au lieu de ~100 m côté OSRM).
+  const effectiveStride = coords.length > 4000 ? 2 : stride;
+
+  for (let i = 0; i < coords.length - 1; i += effectiveStride) {
+    const j = Math.min(i + effectiveStride, coords.length - 1);
+    const [lon1, lat1] = coords[i];
+    const [lon2, lat2] = coords[j];
+    const segKm = haversineKm(lat1, lon1, lat2, lon2);
+    if (segKm <= 0) continue;
+
+    const midLon = (lon1 + lon2) / 2;
+    const midLat = (lat1 + lat2) / 2;
+    const ptBbox = [midLon - padDeg, midLat - padDeg, midLon + padDeg, midLat + padDeg];
+    const pt = turf.point([midLon, midLat]);
 
     let bestDist = Infinity;
     let bestOp = null;
@@ -279,8 +300,8 @@ function analyzeRouteAgainstWays(route, tollWays, { sampleM = 250, toleranceM = 
 
     if (bestDist <= toleranceM) {
       const op = bestOp || "OTHER";
-      byOperator[op] = (byOperator[op] || 0) + stepKm;
-      tolledKm += stepKm;
+      byOperator[op] = (byOperator[op] || 0) + segKm;
+      tolledKm += segKm;
     }
   }
 
