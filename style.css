@@ -47,21 +47,21 @@ body {
 }
 
 /* MapLibre overrides */
-.maplibregl-ctrl-attrib {
+.mapboxgl-ctrl-attrib {
   font-size: 10px;
   opacity: 0.85;
   background: rgba(255, 255, 255, 0.7) !important;
 }
-.maplibregl-ctrl-bottom-right,
-.maplibregl-ctrl-bottom-left {
+.mapboxgl-ctrl-bottom-right,
+.mapboxgl-ctrl-bottom-left {
   bottom: calc(var(--peek-h) + 4px) !important;
 }
-.maplibregl-ctrl-top-right,
-.maplibregl-ctrl-top-left {
+.mapboxgl-ctrl-top-right,
+.mapboxgl-ctrl-top-left {
   top: calc(env(safe-area-inset-top, 0px) + 8px) !important;
 }
-.maplibregl-canvas-container { cursor: grab; }
-.maplibregl-canvas-container:active { cursor: grabbing; }
+.mapboxgl-canvas-container { cursor: grab; }
+.mapboxgl-canvas-container:active { cursor: grabbing; }
 
 /* Endpoint markers (A / B) */
 .endpoint-marker {
@@ -911,7 +911,7 @@ body {
     padding: 4px 18px 16px;
   }
 
-  .maplibregl-ctrl-bottom-right,
-  .maplibregl-ctrl-bottom-left { bottom: 0 !important; }
+  .mapboxgl-ctrl-bottom-right,
+  .mapboxgl-ctrl-bottom-left { bottom: 0 !important; }
   .map-fab { bottom: 28px; right: 28px; }
 }

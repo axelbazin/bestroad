@@ -1,16 +1,44 @@
 /* BestRoad — simulateur d'itinéraire
- * Carte: MapLibre GL + style OpenFreeMap Liberty (vector, sans clé)
+ * Carte: Mapbox GL JS + style Mapbox Standard (3D buildings, sky, light preset)
  * Géocodage: Nominatim (OSM)
  * Routage: OSRM public demo (alternatives=true)
  */
 
 const OSRM_BASE = "https://router.project-osrm.org";
 const NOMINATIM_BASE = "https://nominatim.openstreetmap.org";
-const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
+const MAP_STYLE = "mapbox://styles/mapbox/standard";
 
 const ROUTE_SRC = "br-routes";
 const ROUTE_HALO_LAYER = "br-routes-halo";
 const ROUTE_LINE_LAYER = "br-routes-line";
+
+function ensureMapboxToken() {
+  let token = localStorage.getItem("mapbox_token") || "";
+  if (!token || !token.startsWith("pk.")) {
+    const entered = window.prompt(
+      "Colle ton token public Mapbox (commence par pk.…)\n\nMapbox offre 50 000 chargements/mois gratuits.\nSans carte bancaire enregistrée, tu ne pourras jamais être facturé.\nTu peux générer un token sur mapbox.com → Account → Tokens.",
+      ""
+    );
+    if (entered && entered.trim().startsWith("pk.")) {
+      token = entered.trim();
+      localStorage.setItem("mapbox_token", token);
+    }
+  }
+  if (!token) {
+    document.body.insertAdjacentHTML(
+      "afterbegin",
+      `<div style="position:fixed;top:0;left:0;right:0;background:#fbbf24;color:#1a1300;padding:10px 14px;font-family:inherit;font-size:13px;z-index:9999;text-align:center;">
+         Token Mapbox manquant. Recharge la page et colle ton token public (pk.…)
+       </div>`
+    );
+    throw new Error("Mapbox token requis");
+  }
+  mapboxgl.accessToken = token;
+}
+
+function isMapboxStandard() {
+  return MAP_STYLE.includes("/standard");
+}
 
 const ROUTE_STYLES = {
   fast:  { color: "#3b82f6", label: "Le plus rapide",        emoji: "⚡" },
@@ -36,7 +64,7 @@ const state = {
 /* ---------------- Map ---------------- */
 
 function initMap() {
-  state.map = new maplibregl.Map({
+  state.map = new mapboxgl.Map({
     container: "map",
     style: MAP_STYLE,
     center: [2.5, 46.6],
@@ -47,17 +75,25 @@ function initMap() {
     cooperativeGestures: false,
   });
 
-  state.map.addControl(new maplibregl.AttributionControl({ compact: true }), "top-right");
+  state.map.addControl(new mapboxgl.AttributionControl({ compact: true }), "top-right");
   state.map.addControl(
-    new maplibregl.NavigationControl({ visualizePitch: true, showCompass: true }),
+    new mapboxgl.NavigationControl({ visualizePitch: true, showCompass: true }),
     "top-right"
   );
 
-  state.map.on("load", () => {
+  state.map.on("style.load", () => {
     state.styleLoaded = true;
-    add3DBuildings();
+    if (isMapboxStandard()) {
+      // Mapbox Standard a son propre système de buildings 3D + sky.
+      // On configure juste le preset lumineux pour un rendu plus chaleureux.
+      try {
+        state.map.setConfigProperty("basemap", "lightPreset", "day");
+        state.map.setConfigProperty("basemap", "show3dObjects", true);
+      } catch (_) {}
+    } else {
+      add3DBuildings();
+    }
     setupAutoPitch();
-    // Si des routes étaient en attente d'affichage, on les pousse maintenant.
     if (state.pendingRoutes) {
       drawRoutes(state.pendingRoutes.routes, state.pendingRoutes.tags);
       state.pendingRoutes = null;
@@ -237,7 +273,7 @@ function setMarker(kind, lat, lon, label) {
   el.className = `endpoint-marker endpoint-${kind}`;
   el.textContent = kind === "from" ? "A" : "B";
   el.title = label || "";
-  state.markers[kind] = new maplibregl.Marker({ element: el, anchor: "center" })
+  state.markers[kind] = new mapboxgl.Marker({ element: el, anchor: "center" })
     .setLngLat([lon, lat])
     .addTo(state.map);
 }
@@ -271,12 +307,12 @@ function renderTollPins(routeIndex) {
     const el = document.createElement("div");
     el.className = "toll-pin-wrap";
     el.innerHTML = `<div class="toll-pin">€</div>`;
-    const marker = new maplibregl.Marker({ element: el, anchor: "bottom" })
+    const marker = new mapboxgl.Marker({ element: el, anchor: "bottom" })
       .setLngLat([b.lon, b.lat]);
     if (b.name || b.operator) {
       const opLabel = window.BR_Tolls?.OPERATOR_LABELS?.[b.operator] || b.operator || "Péage";
       marker.setPopup(
-        new maplibregl.Popup({ closeButton: false, offset: 18 }).setHTML(
+        new mapboxgl.Popup({ closeButton: false, offset: 18 }).setHTML(
           `<div style="font-family:inherit;color:#0f172a"><b>${escapeHtml(b.name || "Péage")}</b><br><span style="color:#64748b;font-size:12px">${escapeHtml(opLabel)}</span></div>`
         )
       );
@@ -343,7 +379,7 @@ function ensureUserMarker(lat, lon, heading) {
       <div class="user-accuracy"></div>
       <div class="user-dot"></div>
     `;
-    state.geo.marker = new maplibregl.Marker({ element: wrap, anchor: "center" })
+    state.geo.marker = new mapboxgl.Marker({ element: wrap, anchor: "center" })
       .setLngLat([lon, lat])
       .addTo(state.map);
   } else {
@@ -1098,6 +1134,12 @@ function updatePeekSummary() {
 /* ---------------- Boot ---------------- */
 
 function boot() {
+  try {
+    ensureMapboxToken();
+  } catch (e) {
+    console.error(e);
+    return;
+  }
   initMap();
   initBottomSheet();
   attachAutocomplete("from", "from-suggestions", "from");
